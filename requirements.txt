@@ -1,3 +1,7 @@
+# Jupyter (notebooks)
+jupyter>=1.0.0
+ipykernel>=6.25.0
+
 # EDA (Exploratory Data Analysis)
 pandas>=2.0.0
 numpy>=1.24.0
