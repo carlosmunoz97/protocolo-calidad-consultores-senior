@@ -3,7 +3,7 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass, asdict
-from typing import Dict, Any, Tuple, Optional, List
+from typing import Dict, Any, Tuple, List
 
 import numpy as np
 import pandas as pd
@@ -13,6 +13,7 @@ import ftfy
 from sklearn.experimental import enable_iterative_imputer  # noqa: F401
 from sklearn.impute import IterativeImputer, SimpleImputer
 from sklearn.ensemble import RandomForestClassifier
+
 
 # =========================
 # UI CONFIG
@@ -66,15 +67,17 @@ def numeric_outlier_report(df: pd.DataFrame, iqr_factor: float = 1.5) -> Dict[st
         if s.empty:
             out["columns"][col] = {"outliers": 0, "outliers_%_over_rows": 0.0, "max_iqr_units": 0.0}
             continue
+
         q1, q3 = s.quantile(0.25), s.quantile(0.75)
         iqr = q3 - q1
+
         if iqr == 0:
             mask = pd.Series(False, index=df.index)
             max_units = 0.0
         else:
             lower, upper = q1 - iqr_factor * iqr, q3 + iqr_factor * iqr
             mask = (df[col] < lower) | (df[col] > upper)
-            # Magnitud: distancia máxima medida en unidades de IQR (aprox.)
+
             dist = pd.Series(0.0, index=df.index)
             dist.loc[df[col] < lower] = (lower - df.loc[df[col] < lower, col]).abs() / iqr
             dist.loc[df[col] > upper] = (df.loc[df[col] > upper, col] - upper).abs() / iqr
@@ -108,7 +111,6 @@ def health_score(df: pd.DataFrame) -> Dict[str, Any]:
     out_rep = numeric_outlier_report(df)
     outlier_cell_pct = float(out_rep.get("outlier_cell_%", 0.0))
 
-    # Pesos (ajustables)
     w_null, w_dup, w_out = 0.55, 0.20, 0.25
     penalty = w_null * null_avg + w_dup * dup_pct + w_out * outlier_cell_pct
     score = max(0.0, 100.0 - penalty)
@@ -125,17 +127,15 @@ def health_score(df: pd.DataFrame) -> Dict[str, Any]:
 def justify_imputation_strategy(series: pd.Series) -> str:
     """
     Justificación automática:
-    - Si es numérica: usa mediana si |skew|>1 o hay outliers marcados (robustez),
-      si no, media.
+    - Si es numérica: usa mediana si |skew|>1, si no media.
     - Si es categórica: moda.
     """
     if series.dropna().empty:
         return "Sin datos suficientes para estimar distribución (columna vacía tras NaN)."
 
     if pd.api.types.is_numeric_dtype(series):
-        s = series.dropna().astype(float)
+        s = pd.to_numeric(series.dropna(), errors="coerce").dropna()
         skew = float(s.skew()) if len(s) >= 3 else 0.0
-        # heurística: sesgo alto -> mediana
         if abs(skew) > 1:
             return f"Se usa **mediana** por sesgo alto (skew={skew:.2f}), robusta ante asimetría/outliers."
         return f"Se usa **media** por distribución relativamente simétrica (skew={skew:.2f})."
@@ -145,6 +145,7 @@ def justify_imputation_strategy(series: pd.Series) -> str:
 def df_to_download_bytes(df: pd.DataFrame, encoding="utf-8") -> bytes:
     return df.to_csv(index=False, encoding=encoding).encode(encoding)
 
+
 # =========================
 # CLEANING LOG / AUDIT STRUCTURES
 # =========================
@@ -153,7 +154,7 @@ class EthicalLog:
     dataset_name: str
     dropped_rows: int = 0
     dropped_rows_reason: str = ""
-    dropped_row_indices_sample: List[int] = None
+    dropped_row_indices_sample: List[Any] = None
     duplicates_removed: int = 0
     imputations: List[Dict[str, Any]] = None
     outlier_handling: List[Dict[str, Any]] = None
@@ -168,19 +169,23 @@ class EthicalLog:
 def drop_rows_with_many_nulls(df: pd.DataFrame, k: int = 2) -> Tuple[pd.DataFrame, pd.DataFrame]:
     null_count = df.isna().sum(axis=1)
     mask_drop = null_count >= k
+
     cols_nulas = (
         df[mask_drop]
         .isna()
         .apply(lambda row: list(df.columns[row]), axis=1)
     )
+
     df_eliminados = df[mask_drop].copy()
     df_eliminados["Columnas_Nulas"] = cols_nulas
     df_eliminados["N_Nulos"] = null_count[mask_drop]
+
     df_limpio = df[~mask_drop].copy()
     return df_limpio, df_eliminados
 
+
 # =========================
-# INVENTARIO CLEANING (inv)
+# INVENTARIO CLEANING
 # =========================
 def parse_lead_time(x):
     if pd.isna(x):
@@ -214,10 +219,8 @@ def parse_categoria(x):
 
 def clean_inventario(inv: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
     log = EthicalLog(dataset_name="Inventario")
-
     df = inv.copy()
 
-    # 1) Normalizaciones
     if "Lead_Time_Dias" in df.columns:
         df["Lead_Time_Dias"] = df["Lead_Time_Dias"].apply(parse_lead_time)
         log.notes.append("Normalización Lead_Time_Dias: 'Inmediato'->1, rangos -> máximo del rango, strings -> primer número.")
@@ -225,19 +228,20 @@ def clean_inventario(inv: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
         df["Categoria"] = df["Categoria"].apply(parse_categoria)
         log.notes.append("Normalización Categoria: limpieza de separadores, caracteres y canonicalización (Smartphones/Laptops).")
 
-    # 2) Eliminar filas con >=2 nulos
+    # Eliminar filas con >=2 nulos
     df2, df_elim = drop_rows_with_many_nulls(df, k=2)
     log.dropped_rows = int(len(df_elim))
     log.dropped_rows_reason = "Eliminación de registros con >=2 nulos (imputación extensiva aumenta incertidumbre)."
-    log.dropped_row_indices_sample = df_elim.index[:20].astype(int).tolist()
+    # FIX: no forzar astype(int)
+    log.dropped_row_indices_sample = df_elim.index[:20].tolist()
 
-    # 3) Duplicados (si aplica)
+    # Duplicados
     dup_before = duplicate_count(df2)
     if dup_before > 0:
         df2 = df2.drop_duplicates().copy()
         log.duplicates_removed = int(dup_before)
 
-    # 4) Imputación Lead_Time_Dias (mediana)
+    # Imputación Lead_Time_Dias (mediana)
     if "Lead_Time_Dias" in df2.columns:
         n_before = int(df2["Lead_Time_Dias"].isna().sum())
         if n_before > 0:
@@ -251,21 +255,23 @@ def clean_inventario(inv: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
                 "ethical_justification": justify_imputation_strategy(inv["Lead_Time_Dias"] if "Lead_Time_Dias" in inv.columns else df2["Lead_Time_Dias"])
             })
 
-    # 5) Normalizar Bodega_Origen (casos específicos)
+    # Normalizar Bodega_Origen
     if "Bodega_Origen" in df2.columns:
         df2["Bodega_Origen"] = df2["Bodega_Origen"].replace({"norte": "Norte", "ZONA_FRANCA": "Zona Franca"})
         df2["Bodega_Origen"] = df2["Bodega_Origen"].replace({"BOD-EXT-99": "Externa"})
         log.notes.append("Normalización Bodega_Origen: casos norte/ZONA_FRANCA/BOD-EXT-99->Externa.")
 
-    # 6) Imputación Stock_Actual por mediana dentro de Categoria
+    # Imputación Stock_Actual por mediana dentro de Categoria
     if "Stock_Actual" in df2.columns and "Categoria" in df2.columns:
         n_before = int(df2["Stock_Actual"].isna().sum())
         if n_before > 0:
             med_by_cat = df2.groupby("Categoria")["Stock_Actual"].median()
+
             def _imp(row):
                 if pd.isna(row["Stock_Actual"]):
                     return med_by_cat.get(row["Categoria"], np.nan)
                 return row["Stock_Actual"]
+
             df2["Stock_Actual"] = df2.apply(_imp, axis=1)
             log.imputations.append({
                 "column": "Stock_Actual",
@@ -275,7 +281,7 @@ def clean_inventario(inv: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
                 "ethical_justification": "Se imputa por **mediana por categoría** para preservar escala operativa por familia de producto y evitar sesgos de un valor global."
             })
 
-    # 7) Imputación Categoria faltante usando perfil de stock por bodega
+    # Imputación Categoria por perfil de stock por bodega
     if "Categoria" in df2.columns and "Bodega_Origen" in df2.columns and "Stock_Actual" in df2.columns:
         n_before = int(df2["Categoria"].isna().sum())
         if n_before > 0:
@@ -308,12 +314,10 @@ def clean_inventario(inv: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
                 )
             })
 
-    # 8) Correcciones puntuales de Costo_Unitario_USD
+    # Correcciones puntuales Costo_Unitario_USD
     if "Costo_Unitario_USD" in df2.columns:
-        # Registrar outliers antes (solo informativo)
         rep_before = numeric_outlier_report(df2[["Costo_Unitario_USD"]].copy())
 
-        # Reglas del notebook
         n_fix_005 = int((df2["Costo_Unitario_USD"] == 0.05).sum())
         if n_fix_005 > 0:
             df2.loc[df2["Costo_Unitario_USD"] == 0.05, "Costo_Unitario_USD"] = 500
@@ -339,11 +343,12 @@ def clean_inventario(inv: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
 
     return df2, log
 
+
 # =========================
-# TRANSACCIONES CLEANING (trx)
+# TRANSACCIONES CLEANING
 # =========================
 def normalize_text_full(s):
-    if pd.isna(s): 
+    if pd.isna(s):
         return s
     s = ftfy.fix_text(str(s))
     s = s.lower()
@@ -384,7 +389,6 @@ def clean_numeric_outliers_winsorize(df: pd.DataFrame, numeric_cols: List[str], 
         before = series.copy()
         df_clean[col] = series.clip(lower, upper)
         clipped = int((before != df_clean[col]).sum())
-        # fill median for any remaining NaN
         df_clean[col] = df_clean[col].fillna(s.median())
         report["columns"][col] = {"clipped": clipped, "lower": float(lower), "upper": float(upper)}
     return df_clean, report
@@ -393,37 +397,39 @@ def clean_transacciones(trx: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
     log = EthicalLog(dataset_name="Transacciones")
     df = trx.copy()
 
-    # Reglas directas del notebook
     if "Cantidad_Vendida" in df.columns:
         n_neg5 = int((df["Cantidad_Vendida"] == -5).sum())
         df["Cantidad_Vendida"] = df["Cantidad_Vendida"].replace(-5, 5)
         if n_neg5:
-            log.outlier_handling.append({"column": "Cantidad_Vendida", "rule": "-5 -> 5", "n_affected": n_neg5,
-                                         "ethical_justification": "Corrección de codificación; cantidad negativa específica mapeada a su magnitud."})
+            log.outlier_handling.append({
+                "column": "Cantidad_Vendida", "rule": "-5 -> 5", "n_affected": n_neg5,
+                "ethical_justification": "Corrección de codificación; cantidad negativa específica mapeada a su magnitud."
+            })
 
     if "Tiempo_Entrega_Real" in df.columns:
         n_999 = int((df["Tiempo_Entrega_Real"] == 999).sum())
         df["Tiempo_Entrega_Real"] = df["Tiempo_Entrega_Real"].replace(999, np.nan)
         if n_999:
-            log.outlier_handling.append({"column": "Tiempo_Entrega_Real", "rule": "999 -> NaN", "n_affected": n_999,
-                                         "ethical_justification": "999 usado como centinela; se convierte a faltante para imputación."})
+            log.outlier_handling.append({
+                "column": "Tiempo_Entrega_Real", "rule": "999 -> NaN", "n_affected": n_999,
+                "ethical_justification": "999 usado como centinela; se convierte a faltante para imputación."
+            })
 
-    # Fechas futuras -> NaT (se usa '2026-01-31' como en notebook; aquí lo mostramos como regla del proyecto)
     if "Fecha_Venta" in df.columns:
         TODAY = pd.Timestamp("2026-01-31")
         df["Fecha_Venta"] = pd.to_datetime(df["Fecha_Venta"], errors="coerce")
         n_future = int((df["Fecha_Venta"] > TODAY).sum())
         df.loc[df["Fecha_Venta"] > TODAY, "Fecha_Venta"] = pd.NaT
         if n_future:
-            log.outlier_handling.append({"column": "Fecha_Venta", "rule": f"> {TODAY.date()} -> NaT", "n_affected": n_future,
-                                         "ethical_justification": "Fechas futuras son inconsistentes con registro histórico; se anulan para imputación/consistencia."})
+            log.outlier_handling.append({
+                "column": "Fecha_Venta", "rule": f"> {TODAY.date()} -> NaT", "n_affected": n_future,
+                "ethical_justification": "Fechas futuras son inconsistentes con registro histórico; se anulan para consistencia."
+            })
 
-    # Limpieza de strings vacíos / nulos disfrazados
     EMPTY_VALUES = ["", " ", "nan", "NaN", "null", "NULL", "none", "None", "?", "-", "--"]
     df = df.replace(EMPTY_VALUES, np.nan).replace(r"^\s*$", np.nan, regex=True)
     log.notes.append("Estandarización de vacíos: ['', 'nan', 'null', '?', '--', espacios] -> NaN.")
 
-    # Normalización texto (ciudad/canal)
     city_aliases = {"med": "medellin", "mde": "medellin", "medell": "medellin",
                     "bog": "bogota", "bta": "bogota", "bgta": "bogota"}
     for col in ["Ciudad_Destino", "Canal_Venta"]:
@@ -433,25 +439,26 @@ def clean_transacciones(trx: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
     if "Ciudad_Destino_norm" in df.columns:
         df["Ciudad_Destino_norm"] = df["Ciudad_Destino_norm"].replace(city_aliases)
         city_map = build_fuzzy_map(df["Ciudad_Destino_norm"], threshold=0.9)
-        df["Ciudad_Destino_norm"] = df["Ciudad_Destino_norm"].astype(str).map(city_map)
+        df["Ciudad_Destino_norm"] = df["Ciudad_Destino_norm"].map(city_map)
         log.notes.append("Normalización Ciudad_Destino: aliases + fuzzy matching (threshold=0.9).")
 
-    # Eliminar filas con >=2 nulos (como notebook: <2)
+    # Eliminar filas con >=2 nulos
+    before_idx = df.index
     before_len = len(df)
     df = df[df.isna().sum(axis=1) < 2].copy()
     dropped = before_len - len(df)
     if dropped > 0:
+        dropped_idx = before_idx.difference(df.index)[:20].tolist()
         log.dropped_rows = int(dropped)
         log.dropped_rows_reason = "Eliminación de registros con >=2 nulos (imputación extensiva aumenta incertidumbre)."
-        log.dropped_row_indices_sample = trx.index.difference(df.index)[:20].astype(int).tolist()
+        # FIX: no astype(int)
+        log.dropped_row_indices_sample = dropped_idx
 
-    # Duplicados
     dup_before = duplicate_count(df)
     if dup_before > 0:
         df = df.drop_duplicates().copy()
         log.duplicates_removed = int(dup_before)
 
-    # Imputación numérica avanzada
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
     if numeric_cols:
         n_missing_num = int(df[numeric_cols].isna().sum().sum())
@@ -463,19 +470,18 @@ def clean_transacciones(trx: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
                 "strategy": "IterativeImputer",
                 "value_used": "model-based iterative",
                 "n_imputed": n_missing_num,
-                "ethical_justification": "Imputación multivariante para preservar correlaciones entre variables numéricas y reducir sesgo frente a imputación univariada."
+                "ethical_justification": "Imputación multivariante para preservar correlaciones entre variables numéricas y reducir sesgo."
             })
 
-        # Winsorización / clipping de outliers
         df, clip_report = clean_numeric_outliers_winsorize(df, numeric_cols, iqr_factor=1.5)
         log.outlier_handling.append({
             "column": "NUMERIC (multiple)",
             "rule": "winsorize (IQR clipping) + fill median",
             "n_affected": int(sum(v.get("clipped", 0) for v in clip_report["columns"].values())),
-            "ethical_justification": "Se limita influencia de valores extremos preservando orden de magnitud y evitando eliminar registros completos."
+            "ethical_justification": "Se limita influencia de extremos preservando registros y reduciendo distorsión."
         })
 
-    # Imputación categórica Estado_Envio con RandomForest
+    # RandomForest para Estado_Envio
     col_obj = "Estado_Envio"
     cols_base = ["Cantidad_Vendida", "Precio_Venta_Final", "Costo_Envio", "Tiempo_Entrega_Real"]
     if col_obj in df.columns and all(c in df.columns for c in cols_base):
@@ -496,10 +502,9 @@ def clean_transacciones(trx: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
                     "strategy": "RandomForestClassifier",
                     "value_used": "predicted class",
                     "n_imputed": int(len(predict_idx)),
-                    "ethical_justification": "Se infiere categoría con modelo supervisado usando señales logísticas numéricas; evita imputación arbitraria (moda) cuando hay estructura predictiva."
+                    "ethical_justification": "Se infiere categoría con modelo supervisado usando señales logísticas numéricas."
                 })
             else:
-                # fallback: moda
                 mode_val = df[col_obj].mode(dropna=True)
                 fill = mode_val.iloc[0] if len(mode_val) else "Desconocido"
                 n_pred = int(df[col_obj].isna().sum())
@@ -509,13 +514,14 @@ def clean_transacciones(trx: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
                     "strategy": "mode_fallback",
                     "value_used": str(fill),
                     "n_imputed": n_pred,
-                    "ethical_justification": "Datos insuficientes para entrenar modelo; se usa moda como imputación categórica estándar."
+                    "ethical_justification": "Datos insuficientes para entrenar modelo; se usa moda."
                 })
 
     return df, log
 
+
 # =========================
-# FEEDBACK CLEANING (fb)
+# FEEDBACK CLEANING
 # =========================
 def clean_feedback(fb: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
     log = EthicalLog(dataset_name="Feedback")
@@ -538,17 +544,19 @@ def clean_feedback(fb: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
                 "ethical_justification": "Estandarización semántica para análisis consistente."
             })
 
-    # Edad_Cliente > 90 -> eliminar
+    # Edad_Cliente > 90 -> eliminar (FIX: índices desde df, antes del filtro)
     if "Edad_Cliente" in df.columns:
         mask = df["Edad_Cliente"] > 90
         dropped = int(mask.sum())
         if dropped:
+            idx_drop = df.index[mask][:20].tolist()  # <- FIX
             df = df[~mask].copy()
             log.dropped_rows += dropped
-            log.dropped_rows_reason += (" | " if log.dropped_rows_reason else "") + "Eliminación de Edad_Cliente>90 (fuera de rango definido)."
-            log.dropped_row_indices_sample.extend(fb.index[mask][:20].astype(int).tolist())
+            log.dropped_rows_reason += (" | " if log.dropped_rows_reason else "") + \
+                "Eliminación de Edad_Cliente>90 (fuera de rango definido)."
+            log.dropped_row_indices_sample.extend(idx_drop)
 
-    # Recomienda_Marca: Maybe -> Tal vez; NaN -> Sin respuesta
+    # Recomienda_Marca
     if "Recomienda_Marca" in df.columns:
         df["Recomienda_Marca"] = (
             df["Recomienda_Marca"]
@@ -557,59 +565,54 @@ def clean_feedback(fb: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
         )
         log.notes.append("Normalización Recomienda_Marca: SI/NO/Maybe y faltantes -> Sin respuesta.")
 
-    # Satisfaccion_NPS: normalizar -100..100 -> dividir por 100
+    # Satisfaccion_NPS norm
     if "Satisfaccion_NPS" in df.columns:
         df["Satisfaccion_NPS_norm"] = (df["Satisfaccion_NPS"] / 100).round(2)
         log.notes.append("Satisfaccion_NPS_norm = Satisfaccion_NPS / 100 (redondeo 2 decimales).")
 
     # Comentario_Texto: '---' y NaN -> Sin comentarios
     if "Comentario_Texto" in df.columns:
+        base = fb["Comentario_Texto"] if "Comentario_Texto" in fb.columns else df["Comentario_Texto"]
+        n_imp = int((base.isna() | (base == "---")).sum())
         df["Comentario_Texto"] = df["Comentario_Texto"].replace("---", pd.NA).fillna("Sin comentarios")
         log.imputations.append({
             "column": "Comentario_Texto",
             "strategy": "fillna_constant",
             "value_used": "Sin comentarios",
-            "n_imputed": int((fb["Comentario_Texto"].isna() | (fb["Comentario_Texto"] == "---")).sum()) if "Comentario_Texto" in fb.columns else 0,
+            "n_imputed": n_imp,
             "ethical_justification": "Se preserva registro sin inventar contenido; constante neutral cuando no hay comentario."
         })
 
-    # Rating_Producto fuera de 1..5 -> eliminar
+    # Rating_Producto fuera de 1..5 -> eliminar (FIX: índices desde df, antes del filtro)
     if "Rating_Producto" in df.columns:
         mask = ~df["Rating_Producto"].between(1, 5)
         dropped = int(mask.sum())
         if dropped:
+            idx_drop = df.index[mask][:20].tolist()  # <- FIX
             df = df[~mask].copy()
             log.dropped_rows += dropped
-            log.dropped_rows_reason += (" | " if log.dropped_rows_reason else "") + "Eliminación Rating_Producto fuera de [1,5] (subjetivo; imputar puede sesgar)."
-            log.dropped_row_indices_sample.extend(fb.index[mask][:20].astype(int).tolist())
+            log.dropped_rows_reason += (" | " if log.dropped_rows_reason else "") + \
+                "Eliminación Rating_Producto fuera de [1,5] (subjetivo; imputar puede sesgar)."
+            log.dropped_row_indices_sample.extend(idx_drop)
 
-    # Duplicados (no se eliminan por Feedback_ID según su nota; pero sí se reportan duplicados totales)
     dup_before = duplicate_count(df)
     if dup_before > 0:
-        log.notes.append(f"Duplicados detectados (total filas duplicadas exactas): {dup_before}. No se elimina automáticamente si corresponde a granularidad legítima (ej. múltiples productos por feedback).")
+        log.notes.append(
+            f"Duplicados detectados (total filas duplicadas exactas): {dup_before}. "
+            "No se elimina automáticamente si corresponde a granularidad legítima (ej. múltiples productos por feedback)."
+        )
 
-    # Cantidad_Productos_Feedback
     if "Feedback_ID" in df.columns and "Transaccion_ID" in df.columns:
         df["Cantidad_Productos_Feedback"] = df.groupby("Feedback_ID")["Transaccion_ID"].transform("nunique")
         log.notes.append("Se agrega Cantidad_Productos_Feedback = nunique(Transaccion_ID) por Feedback_ID.")
 
     return df, log
 
+
 # =========================
 # DATASET ROUTING
 # =========================
-def guess_dataset_type(filename: str) -> str:
-    name = (filename or "").lower()
-    if "invent" in name:
-        return "Inventario"
-    if "transac" in name or "logistica" in name or "trx" in name:
-        return "Transacciones"
-    if "feedback" in name or "clientes" in name:
-        return "Feedback"
-    return "Desconocido"
-
 def load_csv(uploaded_file) -> pd.DataFrame:
-    # Intentar separador automático con python engine
     return pd.read_csv(uploaded_file)
 
 def process_dataset(df: pd.DataFrame, dtype: str) -> Tuple[pd.DataFrame, EthicalLog]:
@@ -619,26 +622,25 @@ def process_dataset(df: pd.DataFrame, dtype: str) -> Tuple[pd.DataFrame, Ethical
         return clean_transacciones(df)
     if dtype == "Feedback":
         return clean_feedback(df)
-    # Fallback genérico (sin reglas específicas): eliminar >=2 nulos + imputación simple
+
     log = EthicalLog(dataset_name="Genérico")
-    before_len = len(df)
     df2, elim = drop_rows_with_many_nulls(df, k=2)
     log.dropped_rows = int(len(elim))
     log.dropped_rows_reason = "Fallback: eliminación de filas con >=2 nulos."
-    log.dropped_row_indices_sample = elim.index[:20].astype(int).tolist()
+    log.dropped_row_indices_sample = elim.index[:20].tolist()
 
     dup_before = duplicate_count(df2)
     if dup_before:
         df2 = df2.drop_duplicates().copy()
         log.duplicates_removed = int(dup_before)
 
-    # Imputación simple: numéricas por mediana, categóricas por moda
     for col in df2.columns:
         n_before = int(df2[col].isna().sum())
         if n_before == 0:
             continue
+
         if pd.api.types.is_numeric_dtype(df2[col]):
-            val = float(df2[col].median())
+            val = float(pd.to_numeric(df2[col], errors="coerce").median())
             df2[col] = df2[col].fillna(val)
             strat = "median"
         else:
@@ -646,6 +648,7 @@ def process_dataset(df: pd.DataFrame, dtype: str) -> Tuple[pd.DataFrame, Ethical
             val = mode.iloc[0] if len(mode) else "Sin dato"
             df2[col] = df2[col].fillna(val)
             strat = "mode"
+
         log.imputations.append({
             "column": col,
             "strategy": strat,
@@ -655,6 +658,7 @@ def process_dataset(df: pd.DataFrame, dtype: str) -> Tuple[pd.DataFrame, Ethical
         })
 
     return df2, log
+
 
 # =========================
 # UI: FILE UPLOAD
@@ -668,156 +672,169 @@ with st.sidebar:
     st.divider()
     st.subheader("Parámetros")
     iqr_factor = st.slider("Factor IQR para outliers (auditoría)", 1.0, 3.0, 1.5, 0.1)
-    st.caption("El factor IQR afecta el conteo de outliers reportados. Algunas reglas del notebook aplican correcciones puntuales aparte.")
+    st.caption("El factor IQR afecta el conteo de outliers reportados.")
 
 uploaded = [(inv_file, "Inventario"), (trx_file, "Transacciones"), (fb_file, "Feedback")]
 uploaded = [(f, t) for (f, t) in uploaded if f is not None]
 
-if not uploaded:
-    st.info("Suba al menos un archivo para comenzar.")
-    st.stop()
-
 # =========================
-# PROCESS + DISPLAY
+# MAIN TABS: AUDITORÍA / EDA
 # =========================
-st.markdown("## 📊 Resultados por dataset")
+tab_audit, tab_eda = st.tabs(["🧾 Auditoría de Calidad y Transparencia", "📈 EDA"])
 
-tabs = st.tabs([f"📁 {dtype}" for _, dtype in uploaded])
+with tab_eda:
+    st.subheader("EDA")
+    st.info("Aquí irá el EDA.")
 
-all_reports = {}
-cleaned_files = {}
+with tab_audit:
+    if not uploaded:
+        st.info("Suba al menos un archivo para comenzar.")
+        st.stop()
 
-for (up, dtype), tab in zip(uploaded, tabs):
-    with tab:
-        st.subheader(f"{dtype}")
-        st.caption(f"Archivo: {up.name}")
+    st.markdown("## 📊 Resultados por dataset")
 
-        # Load
-        try:
-            df_raw = load_csv(up)
-        except Exception as e:
-            st.error(f"No se pudo leer el CSV: {e}")
-            continue
+    sub_tabs = st.tabs([f"📁 {dtype}" for _, dtype in uploaded])
 
-        # Pre metrics
-        hs_before = health_score(df_raw)
-        nulls_before = audit_nulls_types(df_raw)
-        dup_before = duplicate_count(df_raw)
-        out_before = numeric_outlier_report(df_raw, iqr_factor=iqr_factor)
+    all_reports = {}
+    cleaned_files = {}
 
-        # Clean
-        df_clean, ethic_log = process_dataset(df_raw, dtype)
+    for (up, dtype), sub_tab in zip(uploaded, sub_tabs):
+        with sub_tab:
+            st.subheader(dtype)
+            st.caption(f"Archivo: {up.name}")
 
-        # Post metrics
-        hs_after = health_score(df_clean)
-        nulls_after = audit_nulls_types(df_clean)
-        dup_after = duplicate_count(df_clean)
-        out_after = numeric_outlier_report(df_clean, iqr_factor=iqr_factor)
+            try:
+                df_raw = load_csv(up)
+            except Exception as e:
+                st.error(f"No se pudo leer el CSV: {e}")
+                continue
 
-        # Store report
-        report = {
-            "dataset": dtype,
-            "file_name": up.name,
-            "shape_before": list(df_raw.shape),
-            "shape_after": list(df_clean.shape),
-            "health_before": hs_before,
-            "health_after": hs_after,
-            "duplicates_before": dup_before,
-            "duplicates_after": dup_after,
-            "outliers_before": out_before,
-            "outliers_after": out_after,
-            "ethical_log": asdict(ethic_log),
-            "nulls_before_top": nulls_before.head(15).to_dict(orient="index"),
-            "nulls_after_top": nulls_after.head(15).to_dict(orient="index"),
-        }
-        all_reports[dtype] = report
+            # Pre metrics
+            hs_before = health_score(df_raw)
+            nulls_before = audit_nulls_types(df_raw)
+            dup_before = duplicate_count(df_raw)
+            out_before = numeric_outlier_report(df_raw, iqr_factor=iqr_factor)
 
-        # Download bytes
-        cleaned_csv_bytes = df_to_download_bytes(df_clean, encoding="utf-8")
-        cleaned_files[dtype] = cleaned_csv_bytes
+            # Clean
+            df_clean, ethic_log = process_dataset(df_raw, dtype)
 
-        # --- UI LAYOUT ---
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Health Score (antes)", hs_before["score"])
-        with c2:
-            st.metric("Health Score (después)", hs_after["score"])
-        with c3:
-            st.metric("Duplicados (antes)", dup_before)
-        with c4:
-            st.metric("Duplicados (después)", dup_after)
+            # Post metrics
+            hs_after = health_score(df_clean)
+            nulls_after = audit_nulls_types(df_clean)
+            dup_after = duplicate_count(df_clean)
+            out_after = numeric_outlier_report(df_clean, iqr_factor=iqr_factor)
 
-        st.divider()
+            report = {
+                "dataset": dtype,
+                "file_name": up.name,
+                "shape_before": list(df_raw.shape),
+                "shape_after": list(df_clean.shape),
+                "health_before": hs_before,
+                "health_after": hs_after,
+                "duplicates_before": dup_before,
+                "duplicates_after": dup_after,
+                "outliers_before": out_before,
+                "outliers_after": out_after,
+                "ethical_log": asdict(ethic_log),
+                "nulls_before_top": nulls_before.head(15).to_dict(orient="index"),
+                "nulls_after_top": nulls_after.head(15).to_dict(orient="index"),
+            }
+            all_reports[dtype] = report
 
-        colA, colB = st.columns([1, 1])
-        with colA:
-            st.markdown("### Nulidad por columna (antes)")
-            st.dataframe(nulls_before, use_container_width=True, height=360)
-        with colB:
-            st.markdown("### Nulidad por columna (después)")
-            st.dataframe(nulls_after, use_container_width=True, height=360)
+            cleaned_csv_bytes = df_to_download_bytes(df_clean, encoding="utf-8")
+            cleaned_files[dtype] = cleaned_csv_bytes
 
-        st.divider()
+            # --- UI LAYOUT ---
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.metric("Health Score (antes)", hs_before["score"])
+            with c2:
+                st.metric("Health Score (después)", hs_after["score"])
+            with c3:
+                st.metric("Duplicados (antes)", dup_before)
+            with c4:
+                st.metric("Duplicados (después)", dup_after)
 
-        colC, colD = st.columns([1, 1])
-        with colC:
-            st.markdown("### Outliers detectados (antes)")
-            st.write(f"Outlier cells % (numéricas): **{out_before.get('outlier_cell_%', 0)}%**")
-            st.dataframe(pd.DataFrame(out_before.get("columns", {})).T.sort_values("outliers", ascending=False),
-                         use_container_width=True, height=280)
-        with colD:
-            st.markdown("### Outliers detectados (después)")
-            st.write(f"Outlier cells % (numéricas): **{out_after.get('outlier_cell_%', 0)}%**")
-            st.dataframe(pd.DataFrame(out_after.get("columns", {})).T.sort_values("outliers", ascending=False),
-                         use_container_width=True, height=280)
+            st.divider()
 
-        st.divider()
+            colA, colB = st.columns([1, 1])
+            with colA:
+                st.markdown("### Nulidad por columna (antes)")
+                st.dataframe(nulls_before, use_container_width=True, height=360)
+            with colB:
+                st.markdown("### Nulidad por columna (después)")
+                st.dataframe(nulls_after, use_container_width=True, height=360)
 
-        st.markdown("### 🧭 Decisión ética y trazabilidad")
-        st.write("**Filas eliminadas**:", ethic_log.dropped_rows)
-        if ethic_log.dropped_rows_reason:
-            st.info(ethic_log.dropped_rows_reason)
-        if ethic_log.dropped_row_indices_sample:
-            st.caption(f"Muestra de índices eliminados (hasta 20): {ethic_log.dropped_row_indices_sample}")
+            st.divider()
 
-        st.write("**Duplicados eliminados**:", ethic_log.duplicates_removed)
+            colC, colD = st.columns([1, 1])
+            with colC:
+                st.markdown("### Outliers detectados (antes)")
+                st.write(f"Outlier cells % (numéricas): **{out_before.get('outlier_cell_%', 0)}%**")
+                st.dataframe(
+                    pd.DataFrame(out_before.get("columns", {})).T.sort_values("outliers", ascending=False),
+                    use_container_width=True,
+                    height=280
+                )
+            with colD:
+                st.markdown("### Outliers detectados (después)")
+                st.write(f"Outlier cells % (numéricas): **{out_after.get('outlier_cell_%', 0)}%**")
+                st.dataframe(
+                    pd.DataFrame(out_after.get("columns", {})).T.sort_values("outliers", ascending=False),
+                    use_container_width=True,
+                    height=280
+                )
 
-        if ethic_log.imputations:
-            st.markdown("#### Imputaciones realizadas (qué y por qué)")
-            st.dataframe(pd.DataFrame(ethic_log.imputations), use_container_width=True)
-        else:
-            st.markdown("#### Imputaciones realizadas")
-            st.caption("No se realizaron imputaciones en este dataset (o no aplicaron reglas).")
+            st.divider()
 
-        if ethic_log.outlier_handling:
-            st.markdown("#### Manejo/corrección de outliers (reglas aplicadas)")
-            st.dataframe(pd.DataFrame(ethic_log.outlier_handling), use_container_width=True)
-        else:
-            st.markdown("#### Manejo/corrección de outliers")
-            st.caption("No se aplicaron reglas específicas de corrección de outliers.")
+            st.markdown("### 🧭 Decisión ética y trazabilidad")
+            st.write("**Filas eliminadas**:", ethic_log.dropped_rows)
+            if ethic_log.dropped_rows_reason:
+                st.info(ethic_log.dropped_rows_reason)
+            if ethic_log.dropped_row_indices_sample:
+                st.caption(f"Muestra de índices eliminados (hasta 20): {ethic_log.dropped_row_indices_sample}")
 
-        if ethic_log.notes:
-            st.markdown("#### Notas")
-            for n in ethic_log.notes:
-                st.write(f"- {n}")
+            st.write("**Duplicados eliminados**:", ethic_log.duplicates_removed)
 
-        st.divider()
+            if ethic_log.imputations:
+                st.markdown("#### Imputaciones realizadas (qué y por qué)")
+                st.dataframe(pd.DataFrame(ethic_log.imputations), use_container_width=True)
+            else:
+                st.markdown("#### Imputaciones realizadas")
+                st.caption("No se realizaron imputaciones en este dataset (o no aplicaron reglas).")
 
-        st.markdown("### ⬇️ Descargar dataset corregido")
-        out_name = up.name.replace(".csv", "") + "_limpio.csv"
-        st.download_button(
-            label=f"Descargar {out_name}",
-            data=cleaned_csv_bytes,
-            file_name=out_name,
-            mime="text/csv",
-            use_container_width=True
-        )
+            if ethic_log.outlier_handling:
+                st.markdown("#### Manejo/corrección de outliers (reglas aplicadas)")
+                st.dataframe(pd.DataFrame(ethic_log.outlier_handling), use_container_width=True)
+            else:
+                st.markdown("#### Manejo/corrección de outliers")
+                st.caption("No se aplicaron reglas específicas de corrección de outliers.")
 
-        st.markdown("### Vista previa (antes / después)")
-        p1, p2 = st.columns(2)
-        with p1:
-            st.caption("Antes")
-            st.dataframe(df_raw.head(20), use_container_width=True, height=280)
-        with p2:
-            st.caption("Después")
-            st.dataframe(df_clean.head(20), use_container_width=True, height=280)
+            if ethic_log.notes:
+                st.markdown("#### Notas")
+                for n in ethic_log.notes:
+                    st.write(f"- {n}")
+
+            st.divider()
+
+            st.markdown("### ⬇️ Descargar dataset corregido")
+            out_name = up.name.replace(".csv", "") + "_limpio.csv"
+            st.download_button(
+                label=f"Descargar {out_name}",
+                data=cleaned_csv_bytes,
+                file_name=out_name,
+                mime="text/csv",
+                use_container_width=True
+            )
+
+            st.markdown("### Vista previa (antes / después)")
+            p1, p2 = st.columns(2)
+            with p1:
+                st.caption("Antes")
+                st.dataframe(df_raw.head(20), use_container_width=True, height=280)
+            with p2:
+                st.caption("Después")
+                st.dataframe(df_clean.head(20), use_container_width=True, height=280)
+
+    st.divider()
+
