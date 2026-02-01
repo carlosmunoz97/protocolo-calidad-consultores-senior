@@ -1,16 +1,11 @@
-# Jupyter (notebooks)
-jupyter>=1.0.0
-ipykernel>=6.25.0
-
-# EDA (Exploratory Data Analysis)
-pandas>=2.0.0
-numpy>=1.24.0
-matplotlib>=3.7.0
-seaborn>=0.12.0
-plotly>=5.15.0
-
-# Streamlit
-streamlit>=1.28.0
-
-# Groq API
-groq>=0.4.0
+streamlit
+pandas
+numpy
+matplotlib
+seaborn
+plotly
+altair
+scipy
+python-dateutil
+statsmodels
+groq
