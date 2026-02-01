@@ -8,4 +8,8 @@ altair
 scipy
 python-dateutil
 statsmodels
+scikit-learn
+ftfy
 groq
+pyarrow
+openpyxl
