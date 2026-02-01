@@ -1,10 +1,3 @@
-# protocolo-calidad-consultores-senior
-Fundamentos en ciencia de datos
-
-
-INCLUIR LOS CSV ANTES DE CORRER EL IPYNB EN LA RAÍZ DEL PROYECTO
-
-
 <p align="center">
   <img src="https://latimpacto.org/wp-content/uploads/2023/11/Eafit.png" width="40%">
 </p>
