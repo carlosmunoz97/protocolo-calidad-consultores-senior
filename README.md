@@ -12,4 +12,4 @@ de Fundamentos en Ciencia de Datos de la Maestría en Ciencia de los Datos y Ana
 - Miguel Roldan Yepes
 - Juan Camilo Cataño Zuleta
 - Juan Manuel Agudelo Olarte
-- xxxxxxx 
+- Carlos José Muñoz Cabrera
