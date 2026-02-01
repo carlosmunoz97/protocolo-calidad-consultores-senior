@@ -821,18 +821,3 @@ for (up, dtype), tab in zip(uploaded, tabs):
         with p2:
             st.caption("Después")
             st.dataframe(df_clean.head(20), use_container_width=True, height=280)
-
-# =========================
-# GLOBAL REPORT DOWNLOAD
-# =========================
-st.markdown("## 📦 Reporte consolidado")
-st.write("Descargue un JSON con auditoría completa (Health Score, nulidad, duplicados, outliers y bitácora ética).")
-
-report_bytes = json.dumps(all_reports, ensure_ascii=False, indent=2).encode("utf-8")
-st.download_button(
-    label="Descargar reporte de auditoría (JSON)",
-    data=report_bytes,
-    file_name="reporte_auditoria_calidad_transparencia.json",
-    mime="application/json",
-    use_container_width=True
-)
