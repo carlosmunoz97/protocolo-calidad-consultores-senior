@@ -13,6 +13,93 @@ try:
 except Exception:
     ftfy = None
 
+# =========================
+# VIS STYLE (Storytelling)
+# =========================
+ACCENT = "#1f77b4"   # énfasis (usar poco)
+NEUTRAL = "#9aa0a6"  # contexto
+RISK = "#d62728"     # alerta (solo cuando amerita)
+
+plt.rcParams.update({
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.grid": True,
+    "grid.alpha": 0.15,
+    "axes.titleweight": "bold",
+    "axes.titlesize": 12,
+    "axes.labelsize": 10,
+    "xtick.labelsize": 9,
+    "ytick.labelsize": 9,
+})
+
+def kpi_tile(title: str, value_text: str, subtitle: str, alert: bool = False):
+    """Tile compacto (evita el KPI disperso)."""
+    fig, ax = plt.subplots(figsize=(6.6, 2.2))
+    ax.axis("off")
+    color = RISK if alert else ACCENT
+    ax.text(0.5, 0.70, value_text, ha="center", va="center",
+            fontsize=34, fontweight="bold", color=color, transform=ax.transAxes)
+    ax.text(0.5, 0.28, subtitle, ha="center", va="center",
+            fontsize=12, color="#333", transform=ax.transAxes)
+    ax.set_title(title, pad=8)
+    plt.tight_layout()
+    return fig
+
+def barh_series(s: pd.Series, title: str, xlabel: str, highlight_last=True, percent=False):
+    """Barras horizontales (mejor para categorías)."""
+    s = s.dropna()
+    if s.empty:
+        return None
+    s = s.sort_values(ascending=True)
+    colors = [NEUTRAL] * len(s)
+    if highlight_last and len(colors) > 0:
+        colors[-1] = ACCENT
+
+    fig, ax = plt.subplots(figsize=(8, 4.8))
+    vals = (s.values * 100) if percent else s.values
+    ax.barh(s.index.astype(str), vals, color=colors)
+    ax.set_title(title)
+    ax.set_xlabel(xlabel + (" (%)" if percent else ""))
+    plt.tight_layout()
+    return fig
+
+def scatter_clean(x, y, title, xlabel, ylabel, add_h0=False):
+    fig, ax = plt.subplots(figsize=(7, 4.8))
+    ax.scatter(x, y, s=14, color=NEUTRAL, alpha=0.6)
+    if add_h0:
+        ax.axhline(0, linewidth=2, color=RISK, alpha=0.8)
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    plt.tight_layout()
+    return fig
+
+def line_daily(df: pd.DataFrame, date_col: str, y_col: str, agg: str, title: str, ylabel: str):
+    """Serie temporal diaria: una sola variable, agregación definida."""
+    tmp = df.dropna(subset=[date_col]).copy()
+    if tmp.empty:
+        return None
+    tmp["day"] = tmp[date_col].dt.date
+
+    y = pd.to_numeric(tmp[y_col], errors="coerce") if y_col in tmp.columns else pd.Series(dtype=float)
+    tmp["_y"] = y
+
+    if agg == "sum":
+        s = tmp.groupby("day")["_y"].sum()
+    elif agg == "mean":
+        s = tmp.groupby("day")["_y"].mean()
+    else:
+        s = tmp.groupby("day")["_y"].apply(lambda s: s.notna().sum())
+
+    fig, ax = plt.subplots(figsize=(8, 4.2))
+    ax.plot(s.index.astype(str), s.values, marker="o", color=ACCENT)
+    ax.set_title(title)
+    ax.set_xlabel("Día")
+    ax.set_ylabel(ylabel)
+    ax.tick_params(axis="x", rotation=45)
+    plt.tight_layout()
+    return fig
+
 
 # =========================
 # TEXT NORMALIZATION
@@ -251,9 +338,9 @@ def render_eda(inv_df: Optional[pd.DataFrame],
 
         join_trx_fb = st.selectbox(
             "Join TRX + Feedback",
-            options=["inner", "left"],
-            index=0,
-            help="inner: solo transacciones con feedback. left: conserva transacciones sin feedback."
+            options=["left", "inner"],
+            index=0,  # left por defecto
+            help="left: conserva transacciones sin feedback (recomendado DSS). inner: solo con feedback."
         )
 
         join_inv = st.selectbox(
@@ -399,233 +486,343 @@ def render_eda(inv_df: Optional[pd.DataFrame],
     with k7:
         st.metric("Tickets (suma)", f"{int(df['Ticket_Indicador'].sum()) if 'Ticket_Indicador' in df.columns else 0}")
 
+        # KPI tile 1: Confiabilidad logística
+    if "Entrega_Tardia" in df.columns and len(df) > 0:
+        tardia = float(df["Entrega_Tardia"].mean() * 100)
+        fig = kpi_tile(
+            "Confiabilidad logística",
+            f"{tardia:.1f}%",
+            "de transacciones tienen entrega tardía",
+            alert=(tardia >= 20)  # umbral ejemplo
+        )
+        st.pyplot(fig)
+    
+    # KPI tile 2: Venta invisible (SKU fantasma)
+    if "SKU_Fantasma" in df.columns and "Ingreso_Total" in df.columns and len(df) > 0:
+        total_ing = safe_sum(df, "Ingreso_Total")
+        ing_fant = safe_sum(df[df["SKU_Fantasma"] == True], "Ingreso_Total")
+        pct = (ing_fant / total_ing * 100) if total_ing > 0 else np.nan
+        fig = kpi_tile(
+            "Venta invisible",
+            f"{pct:.1f}%",
+            "del ingreso está fuera del inventario (SKU fantasma)",
+            alert=(pct >= 10)
+        )
+        st.pyplot(fig)
+
     st.divider()
 
     # =========================
     # ANÁLISIS CUANTITATIVO / CUALITATIVO + VIZ INTERACTIVA
     # =========================
-    st.markdown("## 📊 Análisis (cuantitativo y cualitativo)")
+st.markdown("## 📊 Análisis (curado para decisión)")
 
-    tab_q, tab_c, tab_viz = st.tabs(["Cuantitativo", "Cualitativo", "Visualización interactiva"])
+tab_exec, tab_ops, tab_diag, tab_data = st.tabs([
+    "Ejecutivo (Valor)",
+    "Operación (Logística/Inventario)",
+    "Diagnóstico (Fidelidad)",
+    "Exploración controlada"
+])
 
-    # ---------- CUANTITATIVO ----------
-    with tab_q:
-        st.markdown("### Distribuciones y relaciones (numéricas)")
+# =========================================================
+# TAB 1: EJECUTIVO (VALOR)
+# Enfocado en rentabilidad y venta invisible
+# =========================================================
+with tab_exec:
+    st.markdown("### 1) Rentabilidad: ¿dónde se está yendo el margen?")
+    if {"Margen_Utilidad", "Margen_%", "Canal_Venta_norm"}.issubset(df.columns):
+        # Margen % promedio por canal (controlados)
+        ctrl = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
+        by = ctrl.groupby("Canal_Venta_norm")["Margen_%"].mean().sort_values(ascending=False).head(12)
+        fig = barh_series(by, "Canales más rentables (margen % promedio, controlados)", "Margen %", percent=True)
+        if fig: st.pyplot(fig)
+    else:
+        st.info("Faltan columnas para margen por canal (Canal_Venta_norm, Margen_%).")
 
-        num = numeric_cols(df)
-        if not num:
-            st.info("No se detectaron columnas numéricas.")
-        else:
-            col1, col2 = st.columns(2)
-            with col1:
-                x = st.selectbox("Variable numérica (X)", options=num, index=0)
-            with col2:
-                y = st.selectbox("Variable numérica (Y, opcional)", options=["(Ninguna)"] + num, index=0)
+    st.markdown("### 2) Venta invisible: ingreso controlado vs fantasma")
+    if {"SKU_Fantasma", "Ingreso_Total"}.issubset(df.columns):
+        ctrl_ing = safe_sum(df[df["SKU_Fantasma"] == False], "Ingreso_Total")
+        fan_ing = safe_sum(df[df["SKU_Fantasma"] == True], "Ingreso_Total")
 
-            chart_type = st.selectbox(
-                "Tipo de gráfico",
-                options=["Histograma", "Boxplot", "Scatter (X vs Y)", "Serie temporal (por fecha)"],
-                index=0
-            )
+        fig, ax = plt.subplots(figsize=(6.5, 3.8))
+        ax.bar(["Controlado", "Fantasma"], [ctrl_ing, fan_ing], color=[NEUTRAL, ACCENT])
+        ax.set_title("Parte del ingreso ocurre fuera del inventario (SKU fantasma)")
+        ax.set_ylabel("Ingreso total (USD)")
+        plt.tight_layout()
+        st.pyplot(fig)
 
-            if chart_type == "Histograma":
-                fig = plt.figure()
-                plt.hist(pd.to_numeric(df[x], errors="coerce").dropna(), bins=30)
-                plt.title(f"Histograma: {x}")
-                plt.xlabel(x)
-                plt.ylabel("Frecuencia")
-                plt.tight_layout()
+        # Top canales con más ingreso fantasma
+        if "Canal_Venta_norm" in df.columns:
+            tab = (df.groupby(["Canal_Venta_norm", "SKU_Fantasma"])["Ingreso_Total"]
+                     .sum().unstack(fill_value=0))
+            if True in tab.columns:
+                top = tab[True].sort_values(ascending=False).head(10)
+                fig = barh_series(top, "Dónde se concentra el ingreso fantasma (Top 10 canales)", "Ingreso fantasma (USD)", percent=False)
+                if fig: st.pyplot(fig)
+    else:
+        st.info("Faltan columnas para analizar SKU fantasma (SKU_Fantasma, Ingreso_Total).")
+
+    st.markdown("### 3) Concentración de pérdidas: SKUs con mayor fuga de capital")
+    if {"SKU_ID", "Margen_Utilidad", "Ingreso_Total", "Transaccion_ID"}.issubset(df.columns):
+        ctrl = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
+        base = ctrl.dropna(subset=["SKU_ID", "Margen_Utilidad", "Ingreso_Total", "Transaccion_ID"]).copy()
+
+        sku_kpi = (base.groupby("SKU_ID", as_index=False)
+                   .agg(Ingreso=("Ingreso_Total", "sum"),
+                        Margen=("Margen_Utilidad", "sum"),
+                        Ventas=("Transaccion_ID", "count")))
+        neg = sku_kpi[sku_kpi["Margen"] < 0].sort_values("Margen").head(15)
+        if not neg.empty:
+            s = neg.set_index("SKU_ID")["Margen"]
+            fig = barh_series(s, "Top 15 SKUs con mayor pérdida (margen total negativo)", "Margen total (USD)", highlight_last=False)
+            if fig:
+                # resaltar el peor (más negativo) visualmente: el primero (abajo) queda en ACCENT si highlight_last False no aplica,
+                # pero mantenemos estilo simple; opcional: el peor puede ir en RISK con ajuste adicional.
                 st.pyplot(fig)
-
-            elif chart_type == "Boxplot":
-                fig = plt.figure()
-                plt.boxplot(pd.to_numeric(df[x], errors="coerce").dropna(), vert=True)
-                plt.title(f"Boxplot: {x}")
-                plt.ylabel(x)
-                plt.tight_layout()
-                st.pyplot(fig)
-
-            elif chart_type == "Scatter (X vs Y)":
-                if y == "(Ninguna)":
-                    st.info("Seleccione Y para usar scatter.")
-                else:
-                    xx = pd.to_numeric(df[x], errors="coerce")
-                    yy = pd.to_numeric(df[y], errors="coerce")
-                    mask = xx.notna() & yy.notna()
-                    fig = plt.figure()
-                    plt.scatter(xx[mask], yy[mask], s=10)
-                    plt.title(f"Scatter: {x} vs {y}")
-                    plt.xlabel(x)
-                    plt.ylabel(y)
-                    plt.tight_layout()
-                    st.pyplot(fig)
-
-                    corr = xx[mask].corr(yy[mask])
-                    st.caption(f"Correlación Pearson (sobre pares válidos): {corr:.4f}" if pd.notna(corr) else "Correlación no disponible.")
-
-            elif chart_type == "Serie temporal (por fecha)":
-                if "Fecha_Venta_dt" not in df.columns or df["Fecha_Venta_dt"].notna().sum() == 0:
-                    st.info("No hay Fecha_Venta_dt válida para serie temporal.")
-                else:
-                    agg = st.selectbox("Agregación", options=["sum", "mean", "count"], index=0)
-                    # agrupar por día
-                    tmp = df.dropna(subset=["Fecha_Venta_dt"]).copy()
-                    tmp["day"] = tmp["Fecha_Venta_dt"].dt.date
-                    if agg == "sum":
-                        s = tmp.groupby("day")[x].apply(lambda s: pd.to_numeric(s, errors="coerce").sum())
-                    elif agg == "mean":
-                        s = tmp.groupby("day")[x].apply(lambda s: pd.to_numeric(s, errors="coerce").mean())
-                    else:
-                        s = tmp.groupby("day")[x].apply(lambda s: pd.to_numeric(s, errors="coerce").notna().sum())
-
-                    fig = plt.figure()
-                    plt.plot(s.index.astype(str), s.values, marker="o")
-                    plt.title(f"Serie temporal ({agg}) de {x}")
-                    plt.xlabel("Día")
-                    plt.ylabel(f"{x} ({agg})")
-                    plt.xticks(rotation=45, ha="right")
-                    plt.tight_layout()
-                    st.pyplot(fig)
-
-        st.markdown("### Matriz de correlación (Top)")
-        if len(num) >= 2:
-            corr = df[num].apply(pd.to_numeric, errors="coerce").corr()
-            st.dataframe(corr.round(3), use_container_width=True, height=320)
         else:
-            st.caption("No hay suficientes numéricas para correlación.")
+            st.caption("No hay SKUs con margen total negativo (según filtros).")
+    else:
+        st.info("Faltan columnas para fuga por SKU (SKU_ID, Margen_Utilidad, Ingreso_Total, Transaccion_ID).")
 
-    # ---------- CUALITATIVO ----------
-    with tab_c:
-        st.markdown("### Frecuencias / composición (categóricas)")
-        cats = cat_cols(df)
-        if not cats:
-            st.info("No se detectaron columnas categóricas.")
+
+# =========================================================
+# TAB 2: OPERACIÓN (LOGÍSTICA / INVENTARIO)
+# Enfocado en confiabilidad y cuellos de botella
+# =========================================================
+with tab_ops:
+    st.markdown("### 1) Confiabilidad logística y su impacto en NPS")
+    if {"Entrega_Tardia", "Satisfaccion_NPS"}.issubset(df.columns):
+        grp = df.groupby("Entrega_Tardia")["Satisfaccion_NPS"].mean().reindex([False, True]).dropna()
+        if not grp.empty:
+            fig, ax = plt.subplots(figsize=(6.5, 3.5))
+            labels = ["Normal", "Tardía"][:len(grp)]
+            colors = [NEUTRAL, ACCENT][:len(grp)]
+            ax.bar(labels, grp.values, color=colors)
+            ax.set_title("Los retrasos se asocian con menor NPS (promedio)")
+            ax.set_ylabel("NPS promedio")
+            plt.tight_layout()
+            st.pyplot(fig)
+    else:
+        st.info("Faltan columnas (Entrega_Tardia, Satisfaccion_NPS).")
+
+    st.markdown("### 2) Quiebre de stock: tasa y categorías críticas")
+    if {"Stock_Insuficiente", "Categoria"}.issubset(df.columns):
+        tasa = float(df["Stock_Insuficiente"].mean() * 100) if len(df) else np.nan
+        fig = kpi_tile("Riesgo de quiebre de stock", f"{tasa:.1f}%", "de transacciones con stock insuficiente", alert=(tasa >= 10))
+        st.pyplot(fig)
+
+        ctrl = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
+        if len(ctrl) > 0:
+            top = (ctrl.assign(q=ctrl["Stock_Insuficiente"].astype(int))
+                      .groupby("Categoria")["q"].mean()
+                      .sort_values(ascending=False)
+                      .head(10))
+            fig = barh_series(top, "Categorías con más quiebre de stock (Top 10)", "Tasa stock insuficiente", percent=True)
+            if fig: st.pyplot(fig)
+    else:
+        st.info("Faltan columnas (Stock_Insuficiente, Categoria).")
+
+    st.markdown("### 3) Cuellos de botella por ciudad/bodega (robusto, no “correlación por todo”)")
+    st.caption("Se prioriza tasa de NPS bajo y tiempo promedio; la correlación se usa solo si hay volumen suficiente.")
+
+    # Ciudades
+    if {"Ciudad_Destino_norm", "Tiempo_Entrega_Real", "Satisfaccion_NPS", "Transaccion_ID"}.issubset(df.columns):
+        log = df.dropna(subset=["Ciudad_Destino_norm", "Tiempo_Entrega_Real", "Satisfaccion_NPS", "Transaccion_ID"]).copy()
+        log["NPS_bajo"] = (log["Satisfaccion_NPS"] <= 0).astype(int)
+
+        stats = (log.groupby("Ciudad_Destino_norm")
+                   .agg(n=("Transaccion_ID", "count"),
+                        tiempo_prom=("Tiempo_Entrega_Real", "mean"),
+                        tasa_nps_bajo=("NPS_bajo", "mean")))
+        stats = stats[stats["n"] >= 50].sort_values(["tasa_nps_bajo", "tiempo_prom"], ascending=False).head(12)
+
+        if not stats.empty:
+            fig = barh_series(stats["tasa_nps_bajo"], "Top ciudades por NPS bajo (n>=50)", "Tasa NPS bajo", percent=True)
+            if fig: st.pyplot(fig)
+            st.dataframe(stats.round(3), use_container_width=True)
+    else:
+        st.caption("No hay columnas suficientes para análisis por ciudad.")
+
+    # Bodegas (solo controlados)
+    if {"Bodega_Origen", "Tiempo_Entrega_Real", "Satisfaccion_NPS", "Transaccion_ID"}.issubset(df.columns):
+        ctrl = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
+        bod = ctrl.dropna(subset=["Bodega_Origen", "Tiempo_Entrega_Real", "Satisfaccion_NPS", "Transaccion_ID"]).copy()
+        bod["NPS_bajo"] = (bod["Satisfaccion_NPS"] <= 0).astype(int)
+
+        stats = (bod.groupby("Bodega_Origen")
+                   .agg(n=("Transaccion_ID", "count"),
+                        tiempo_prom=("Tiempo_Entrega_Real", "mean"),
+                        tasa_nps_bajo=("NPS_bajo", "mean")))
+        stats = stats[stats["n"] >= 50].sort_values(["tasa_nps_bajo", "tiempo_prom"], ascending=False).head(10)
+
+        if not stats.empty:
+            fig = barh_series(stats["tasa_nps_bajo"], "Top bodegas por NPS bajo (n>=50, controlados)", "Tasa NPS bajo", percent=True)
+            if fig: st.pyplot(fig)
+            st.dataframe(stats.round(3), use_container_width=True)
+    else:
+        st.caption("No hay columnas suficientes para análisis por bodega.")
+
+
+# =========================================================
+# TAB 3: DIAGNÓSTICO (FIDELIDAD)
+# Paradoja: stock alto + NPS bajo -> causa probable
+# =========================================================
+with tab_diag:
+    st.markdown("### Paradoja de fidelidad: stock alto pero clientes insatisfechos")
+    need = ["Categoria", "Stock_Actual", "Satisfaccion_NPS", "Rating_Producto", "Rating_Logistica",
+            "Costo_Envio", "Margen_Utilidad", "Ingreso_Total", "Transaccion_ID"]
+    if all(c in df.columns for c in need):
+        ctrl = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
+        fid = ctrl.dropna(subset=need).copy()
+
+        cat = (fid.groupby("Categoria", as_index=False)
+               .agg(ventas=("Transaccion_ID", "count"),
+                    stock_prom=("Stock_Actual", "mean"),
+                    nps_prom=("Satisfaccion_NPS", "mean"),
+                    rating_prod=("Rating_Producto", "mean"),
+                    rating_log=("Rating_Logistica", "mean"),
+                    envio_prom=("Costo_Envio", "mean"),
+                    margen_prom=("Margen_Utilidad", "mean"),
+                    ingreso=("Ingreso_Total", "sum")))
+
+        # cortes robustos
+        x_cut = cat["stock_prom"].quantile(0.75)
+        y_cut = cat["nps_prom"].quantile(0.25)
+
+        cat2 = cat[cat["ventas"] >= 30].copy()
+        paradoja = cat2[(cat2["stock_prom"] >= x_cut) & (cat2["nps_prom"] <= y_cut)].copy()
+        paradoja = paradoja.sort_values("ventas", ascending=False).head(10)
+
+        st.caption(f"Cortes robustos: Stock p75={x_cut:.1f}, NPS p25={y_cut:.2f} (solo categorías con ventas>=30).")
+
+        # scatter cuadrantes (limpio)
+        fig, ax = plt.subplots(figsize=(7, 4.8))
+        ax.scatter(cat2["stock_prom"], cat2["nps_prom"], s=30, color=NEUTRAL, alpha=0.7)
+        ax.axvline(x_cut, linewidth=2, color=ACCENT, alpha=0.8)
+        ax.axhline(y_cut, linewidth=2, color=RISK, alpha=0.8)
+        ax.set_title("Stock vs NPS por categoría (cuadrantes)")
+        ax.set_xlabel("Stock promedio")
+        ax.set_ylabel("NPS promedio")
+        plt.tight_layout()
+        st.pyplot(fig)
+
+        if not paradoja.empty:
+            st.markdown("#### Top categorías en paradoja (diagnóstico sugerido)")
+            def diag(row):
+                if row["rating_prod"] < 3.5:
+                    return "Probable calidad"
+                if row["rating_log"] < 3.5:
+                    return "Probable logística/servicio"
+                if row["margen_prom"] < 0:
+                    return "Probable sobrecosto"
+                return "Revisar precio/costo"
+
+            paradoja["Diagnostico"] = paradoja.apply(diag, axis=1)
+            st.dataframe(paradoja.round(3), use_container_width=True)
+
+            # barras comparativas (solo 2-3 vistas, restringido)
+            s = paradoja.set_index("Categoria")["nps_prom"]
+            fig = barh_series(s, "NPS promedio en categorías de la paradoja", "NPS promedio", percent=False, highlight_last=False)
+            if fig: st.pyplot(fig)
+    else:
+        st.info("Faltan columnas para diagnóstico de fidelidad (paradoja).")
+
+
+# =========================================================
+# TAB 4: EXPLORACIÓN CONTROLADA (DINÁMICO, PERO RESTRINGIDO)
+# Solo 4 gráficos permitidos, con variables pre-curadas
+# =========================================================
+with tab_data:
+    st.markdown("### Exploración controlada (dinámico pero útil)")
+    st.caption("Se limita a gráficos que suelen aportar valor en DSS: no se permite cualquier combinación.")
+
+    # Lista curada de variables numéricas útiles (si existen)
+    curated_num = [c for c in [
+        "Ingreso_Total", "Margen_Utilidad", "Margen_%", "Costo_Envio",
+        "Tiempo_Entrega_Real", "Lead_Time_Dias", "Stock_Actual", "Cantidad_Vendida",
+        "Satisfaccion_NPS", "Rating_Producto", "Rating_Logistica", "Ticket_Indicador"
+    ] if c in df.columns]
+
+    curated_cat = [c for c in [
+        "Canal_Venta_norm", "Categoria", "Ciudad_Destino_norm", "Bodega_Origen", "Riesgo_Operacion"
+    ] if c in df.columns]
+
+    chart = st.selectbox(
+        "Seleccione visualización",
+        options=[
+            "Distribución (histograma) de una métrica",
+            "Top categorías por una métrica",
+            "Relación: costo envío vs margen",
+            "Serie temporal: métrica diaria"
+        ],
+        index=0
+    )
+
+    if chart == "Distribución (histograma) de una métrica":
+        if not curated_num:
+            st.info("No hay variables numéricas curadas disponibles.")
         else:
-            c = st.selectbox("Variable categórica", options=cats, index=0)
-            topn = st.slider("Top N", 5, 30, 10)
-            vc = df[c].astype(str).value_counts(dropna=False).head(topn)
-
-            st.dataframe(vc.rename("conteo").to_frame(), use_container_width=True)
-
-            fig = plt.figure()
-            vc.plot(kind="bar")
-            plt.title(f"Top {topn}: {c}")
-            plt.xlabel(c)
-            plt.ylabel("Conteo")
-            plt.xticks(rotation=45, ha="right")
+            x = st.selectbox("Métrica", curated_num, index=0)
+            series = pd.to_numeric(df[x], errors="coerce").dropna()
+            fig, ax = plt.subplots(figsize=(7, 4.2))
+            ax.hist(series, bins=30, color=NEUTRAL)
+            if x in ["Margen_Utilidad", "Margen_%"]:
+                ax.axvline(0, linewidth=2, color=RISK, alpha=0.8)
+            ax.set_title(f"Distribución de {x}")
+            ax.set_xlabel(x)
+            ax.set_ylabel("Frecuencia")
             plt.tight_layout()
             st.pyplot(fig)
 
-        st.markdown("### SKU fantasma (cualitativo de control)")
-        if "SKU_Fantasma" in df.columns:
-            sku_f = int(df["SKU_Fantasma"].sum())
-            pct = (sku_f / len(df) * 100) if len(df) else 0
-            st.write(f"Ventas con SKU fantasma: **{sku_f:,}** (**{pct:.2f}%**)")
+    elif chart == "Top categorías por una métrica":
+        if not curated_cat or not curated_num:
+            st.info("Se requiere al menos 1 categórica y 1 numérica curada.")
+        else:
+            cat = st.selectbox("Categoría", curated_cat, index=0)
+            metric = st.selectbox("Métrica", curated_num, index=0)
+            agg = st.selectbox("Agregación", ["sum", "mean", "count"], index=0)
+            topn = st.slider("Top N", 5, 20, 10)
 
-            if {"Canal_Venta_norm", "Ingreso_Total"}.issubset(df.columns):
-                tab = (df.assign(es_fantasma=df["SKU_Fantasma"])
-                         .groupby(["Canal_Venta_norm", "es_fantasma"])["Ingreso_Total"]
-                         .sum()
-                         .unstack(fill_value=0))
-                st.dataframe(tab.sort_values(by=True if True in tab.columns else tab.columns[-1], ascending=False).head(15),
-                             use_container_width=True)
+            tmp = df[[cat, metric]].copy()
+            tmp[cat] = tmp[cat].astype(str)
+            tmp[metric] = pd.to_numeric(tmp[metric], errors="coerce")
 
-    # ---------- VISUALIZACIÓN INTERACTIVA (elige gráfico que “mejor se ajuste”) ----------
-    with tab_viz:
-        st.markdown("### Constructor de gráficos (interactivo)")
-
-        num = numeric_cols(df)
-        cats = cat_cols(df)
-
-        viz_type = st.selectbox(
-            "Tipo de visualización",
-            options=[
-                "Univariado numérico",
-                "Univariado categórico",
-                "Bivariado (numérico vs numérico)",
-                "Bivariado (categórico vs numérico)",
-            ],
-            index=0
-        )
-
-        if viz_type == "Univariado numérico":
-            if not num:
-                st.info("No hay numéricas.")
+            if agg == "sum":
+                s = tmp.groupby(cat)[metric].sum().sort_values(ascending=False).head(topn)
+                xlabel = f"{metric} (sum)"
+            elif agg == "mean":
+                s = tmp.groupby(cat)[metric].mean().sort_values(ascending=False).head(topn)
+                xlabel = f"{metric} (mean)"
             else:
-                x = st.selectbox("Variable", options=num, index=0)
-                g = st.selectbox("Gráfico", options=["Histograma", "Boxplot"], index=0)
-                if g == "Histograma":
-                    fig = plt.figure()
-                    plt.hist(pd.to_numeric(df[x], errors="coerce").dropna(), bins=30)
-                    plt.title(f"Histograma: {x}")
-                    plt.xlabel(x); plt.ylabel("Frecuencia")
-                    plt.tight_layout()
-                    st.pyplot(fig)
-                else:
-                    fig = plt.figure()
-                    plt.boxplot(pd.to_numeric(df[x], errors="coerce").dropna())
-                    plt.title(f"Boxplot: {x}")
-                    plt.ylabel(x)
-                    plt.tight_layout()
-                    st.pyplot(fig)
+                s = tmp.groupby(cat)[metric].apply(lambda s: s.notna().sum()).sort_values(ascending=False).head(topn)
+                xlabel = f"{metric} (count)"
 
-        elif viz_type == "Univariado categórico":
-            if not cats:
-                st.info("No hay categóricas.")
-            else:
-                x = st.selectbox("Variable", options=cats, index=0)
-                topn = st.slider("Top N", 5, 40, 15)
-                vc = df[x].astype(str).value_counts(dropna=False).head(topn)
-                fig = plt.figure()
-                vc.plot(kind="bar")
-                plt.title(f"Top {topn}: {x}")
-                plt.xlabel(x); plt.ylabel("Conteo")
-                plt.xticks(rotation=45, ha="right")
-                plt.tight_layout()
-                st.pyplot(fig)
+            fig = barh_series(s, f"Top {topn} {cat} por {xlabel}", xlabel, highlight_last=True, percent=False)
+            if fig: st.pyplot(fig)
 
-        elif viz_type == "Bivariado (numérico vs numérico)":
-            if len(num) < 2:
-                st.info("Se requieren al menos 2 numéricas.")
-            else:
-                x = st.selectbox("X", options=num, index=0)
-                y = st.selectbox("Y", options=[c for c in num if c != x], index=0)
-                fig = plt.figure()
-                xx = pd.to_numeric(df[x], errors="coerce")
-                yy = pd.to_numeric(df[y], errors="coerce")
-                mask = xx.notna() & yy.notna()
-                plt.scatter(xx[mask], yy[mask], s=10)
-                plt.title(f"Scatter: {x} vs {y}")
-                plt.xlabel(x); plt.ylabel(y)
-                plt.tight_layout()
-                st.pyplot(fig)
+    elif chart == "Relación: costo envío vs margen":
+        if not {"Costo_Envio", "Margen_Utilidad"}.issubset(df.columns):
+            st.info("Faltan columnas (Costo_Envio, Margen_Utilidad).")
+        else:
+            ctrl = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
+            xx = pd.to_numeric(ctrl["Costo_Envio"], errors="coerce")
+            yy = pd.to_numeric(ctrl["Margen_Utilidad"], errors="coerce")
+            mask = xx.notna() & yy.notna()
+            fig = scatter_clean(xx[mask], yy[mask],
+                               "El costo de envío está empujando ventas por debajo de margen 0",
+                               "Costo_Envio (USD)", "Margen_Utilidad (USD)", add_h0=True)
+            st.pyplot(fig)
 
-        else:  # categórico vs numérico
-            if not cats or not num:
-                st.info("Se requiere 1 categórica y 1 numérica.")
-            else:
-                x = st.selectbox("Categoría (X)", options=cats, index=0)
-                y = st.selectbox("Numérica (Y)", options=num, index=0)
-                agg = st.selectbox("Agregación", options=["mean", "sum", "count"], index=0)
+    else:  # Serie temporal
+        if "Fecha_Venta_dt" not in df.columns or not df["Fecha_Venta_dt"].notna().any():
+            st.info("No hay Fecha_Venta_dt válida.")
+        elif not curated_num:
+            st.info("No hay métricas numéricas curadas disponibles.")
+        else:
+            x = st.selectbox("Métrica", curated_num, index=0)
+            agg = st.selectbox("Agregación", ["sum", "mean", "count"], index=0)
+            fig = line_daily(df, "Fecha_Venta_dt", x, agg,
+                             title=f"Serie temporal diaria: {x} ({agg})",
+                             ylabel=f"{x} ({agg})")
+            if fig: st.pyplot(fig)
 
-                tmp = df[[x, y]].copy()
-                tmp[x] = tmp[x].astype(str)
-                tmp[y] = pd.to_numeric(tmp[y], errors="coerce")
-
-                if agg == "count":
-                    s = tmp.groupby(x)[y].apply(lambda s: s.notna().sum()).sort_values(ascending=False).head(20)
-                    ylabel = f"{y} (count)"
-                elif agg == "sum":
-                    s = tmp.groupby(x)[y].sum().sort_values(ascending=False).head(20)
-                    ylabel = f"{y} (sum)"
-                else:
-                    s = tmp.groupby(x)[y].mean().sort_values(ascending=False).head(20)
-                    ylabel = f"{y} (mean)"
-
-                fig = plt.figure()
-                s.plot(kind="bar")
-                plt.title(f"{ylabel} por {x} (Top 20)")
-                plt.xlabel(x); plt.ylabel(ylabel)
-                plt.xticks(rotation=45, ha="right")
-                plt.tight_layout()
-                st.pyplot(fig)
