@@ -1,7 +1,7 @@
 # eda_page.py
 import re
 import unicodedata
-from typing import Dict, Tuple, Any, Optional
+from typing import Dict, Tuple, Any, Optional, List
 
 import numpy as np
 import pandas as pd
@@ -37,12 +37,6 @@ def safe_sum(df: pd.DataFrame, col: str) -> float:
     return float(pd.to_numeric(df[col], errors="coerce").fillna(0).sum())
 
 
-def safe_mean(df: pd.DataFrame, col: str) -> float:
-    if col not in df.columns:
-        return float("nan")
-    return float(pd.to_numeric(df[col], errors="coerce").mean())
-
-
 def ensure_str(df: pd.DataFrame, col: str) -> None:
     if col in df.columns:
         df[col] = df[col].astype(str).str.strip()
@@ -64,6 +58,27 @@ def ensure_bool_ticket(df: pd.DataFrame, col: str) -> None:
     df[col] = t.isin(["si", "sí", "s", "yes", "true", "1"])
 
 
+def duplicate_count(df: pd.DataFrame) -> int:
+    return int(df.duplicated().sum())
+
+
+def null_profile(df: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame({
+        "nulos_%": (df.isna().mean() * 100).round(2),
+        "nulos_n": df.isna().sum().astype(int),
+        "tipo": df.dtypes.astype(str)
+    }).sort_values("nulos_%", ascending=False)
+    return out
+
+
+def numeric_cols(df: pd.DataFrame) -> List[str]:
+    return df.select_dtypes(include="number").columns.tolist()
+
+
+def cat_cols(df: pd.DataFrame) -> List[str]:
+    return df.select_dtypes(exclude="number").columns.tolist()
+
+
 # =========================
 # BUILD UNIFIED DATASET (JOIN + FE)
 # =========================
@@ -71,13 +86,6 @@ def ensure_bool_ticket(df: pd.DataFrame, col: str) -> None:
 def build_unified_dataset(inv: pd.DataFrame, trx: pd.DataFrame, fb: pd.DataFrame,
                           join_trx_fb: str = "inner",
                           join_inv: str = "left") -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    """
-    - Normaliza llaves
-    - Agrega feedback a nivel Transaccion_ID
-    - Join trx + fb_agg (inner/left)
-    - Join con inventario (left/inner)
-    - Feature engineering
-    """
     meta: Dict[str, Any] = {"warnings": [], "counts": {}, "join_params": {}}
     meta["join_params"] = {"join_trx_fb": join_trx_fb, "join_inv": join_inv}
 
@@ -119,7 +127,6 @@ def build_unified_dataset(inv: pd.DataFrame, trx: pd.DataFrame, fb: pd.DataFrame
         meta["warnings"].append("Transacciones o Feedback agregado no tienen Transaccion_ID; no se puede unir.")
         trx_fb = trx2.copy()
     else:
-        # validate: muchas transacciones -> 1 fila de fb_agg por id
         trx_fb = trx2.merge(
             fb_agg,
             on="Transaccion_ID",
@@ -140,7 +147,6 @@ def build_unified_dataset(inv: pd.DataFrame, trx: pd.DataFrame, fb: pd.DataFrame
         )
 
     # ---------- Feature Engineering ----------
-    # Ingreso total
     if {"Cantidad_Vendida", "Precio_Venta_Final"}.issubset(dataset.columns):
         dataset["Ingreso_Total"] = (
             pd.to_numeric(dataset["Cantidad_Vendida"], errors="coerce")
@@ -149,7 +155,6 @@ def build_unified_dataset(inv: pd.DataFrame, trx: pd.DataFrame, fb: pd.DataFrame
     else:
         dataset["Ingreso_Total"] = np.nan
 
-    # Costo producto
     if {"Cantidad_Vendida", "Costo_Unitario_USD"}.issubset(dataset.columns):
         dataset["Costo_Producto"] = (
             pd.to_numeric(dataset["Cantidad_Vendida"], errors="coerce")
@@ -158,13 +163,11 @@ def build_unified_dataset(inv: pd.DataFrame, trx: pd.DataFrame, fb: pd.DataFrame
     else:
         dataset["Costo_Producto"] = np.nan
 
-    # Costo logístico
     if "Costo_Envio" in dataset.columns:
         dataset["Costo_Logistico"] = pd.to_numeric(dataset["Costo_Envio"], errors="coerce")
     else:
         dataset["Costo_Logistico"] = np.nan
 
-    # Margen
     dataset["Margen_Utilidad"] = dataset["Ingreso_Total"] - dataset["Costo_Producto"] - dataset["Costo_Logistico"]
 
     dataset["Margen_%"] = np.where(
@@ -173,13 +176,11 @@ def build_unified_dataset(inv: pd.DataFrame, trx: pd.DataFrame, fb: pd.DataFrame
         np.nan
     )
 
-    # SKU fantasma
     if "Costo_Unitario_USD" in dataset.columns:
         dataset["SKU_Fantasma"] = dataset["Costo_Unitario_USD"].isna()
     else:
         dataset["SKU_Fantasma"] = False
 
-    # Stock insuficiente
     if {"Stock_Actual", "Cantidad_Vendida"}.issubset(dataset.columns):
         dataset["Stock_Insuficiente"] = (
             pd.to_numeric(dataset["Stock_Actual"], errors="coerce")
@@ -188,7 +189,6 @@ def build_unified_dataset(inv: pd.DataFrame, trx: pd.DataFrame, fb: pd.DataFrame
     else:
         dataset["Stock_Insuficiente"] = False
 
-    # Entrega tardía
     if {"Tiempo_Entrega_Real", "Lead_Time_Dias"}.issubset(dataset.columns):
         dataset["Entrega_Tardia"] = (
             pd.to_numeric(dataset["Tiempo_Entrega_Real"], errors="coerce")
@@ -203,23 +203,19 @@ def build_unified_dataset(inv: pd.DataFrame, trx: pd.DataFrame, fb: pd.DataFrame
         "Normal"
     )
 
-    # Normalizaciones de texto (si existen)
     for col in ["Ciudad_Destino", "Canal_Venta"]:
         if col in dataset.columns:
             dataset[f"{col}_norm"] = dataset[col].apply(normalize_text_full)
 
-    # Fechas
     ensure_dt(dataset, "Fecha_Venta", "Fecha_Venta_dt")
     ensure_dt(dataset, "Ultima_Revision", "Ultima_Revision_dt")
 
-    # Ticket
     if "Ticket_Soporte_Abierto" in dataset.columns:
         ensure_bool_ticket(dataset, "Ticket_Soporte_Abierto")
         dataset["Ticket_Indicador"] = dataset["Ticket_Soporte_Abierto"].astype(int)
     else:
         dataset["Ticket_Indicador"] = 0
 
-    # Meta
     meta["counts"] = {
         "inv_rows": int(len(inv2)),
         "trx_rows": int(len(trx2)),
@@ -232,7 +228,7 @@ def build_unified_dataset(inv: pd.DataFrame, trx: pd.DataFrame, fb: pd.DataFrame
 
 
 # =========================
-# MAIN EDA RENDER
+# RENDER
 # =========================
 def render_eda(inv_df: Optional[pd.DataFrame],
                trx_df: Optional[pd.DataFrame],
@@ -240,7 +236,7 @@ def render_eda(inv_df: Optional[pd.DataFrame],
                inv_name: str = "Inventario",
                trx_name: str = "Transacciones",
                fb_name: str = "Feedback"):
-    st.subheader("📈 EDA dinámico")
+    st.subheader("📈 EDA dinámico (sobre datasets limpios)")
 
     if inv_df is None or trx_df is None or fb_df is None:
         st.info("Para el EDA consolidado se requieren los 3 datasets.")
@@ -248,7 +244,7 @@ def render_eda(inv_df: Optional[pd.DataFrame],
         return
 
     # =========================
-    # CONTROLES INTERACTIVOS
+    # CONTROLES (solo lo esencial)
     # =========================
     with st.sidebar:
         st.subheader("EDA: Controles")
@@ -267,15 +263,9 @@ def render_eda(inv_df: Optional[pd.DataFrame],
             help="left: conserva ventas aunque el SKU no exista en inventario (SKU fantasma)."
         )
 
-        show_only_controlados = st.checkbox(
-            "Filtrar solo SKUs controlados (no fantasma)",
-            value=False
-        )
-
-        # Filtros dinámicos (se aplican luego de construir dataset)
+        show_only_controlados = st.checkbox("Solo SKUs controlados (no fantasma)", value=False)
         enable_filters = st.checkbox("Activar filtros (canal/categoría/fechas)", value=True)
 
-    # Construir dataset unificado (cacheado)
     dataset, meta = build_unified_dataset(inv_df, trx_df, fb_df, join_trx_fb=join_trx_fb, join_inv=join_inv)
 
     # Explicación (requerida)
@@ -290,32 +280,12 @@ def render_eda(inv_df: Optional[pd.DataFrame],
         )
         st.caption("Implementación: agregación (mean/any) por Transaccion_ID antes del join con Transacciones.")
 
-    # Warnings
     if meta.get("warnings"):
         for w in meta["warnings"]:
             st.warning(w)
 
-    # Chequeos de unión
-    with st.expander("🔎 Unión estratégica (conteos y control)", expanded=False):
-        c1, c2, c3, c4, c5 = st.columns(5)
-        with c1:
-            st.metric(f"Filas {inv_name}", meta["counts"]["inv_rows"])
-        with c2:
-            st.metric(f"Filas {trx_name}", meta["counts"]["trx_rows"])
-        with c3:
-            st.metric(f"Filas {fb_name}", meta["counts"]["fb_rows"])
-        with c4:
-            st.metric("Feedback agregado", meta["counts"]["fb_agg_rows"])
-        with c5:
-            st.metric("Dataset unificado", meta["counts"]["dataset_rows"])
-
-        if "SKU_Fantasma" in dataset.columns:
-            sku_f = int(dataset["SKU_Fantasma"].sum())
-            pct = (sku_f / len(dataset) * 100) if len(dataset) else 0
-            st.write(f"**SKU fantasma (sin match en inventario):** {sku_f} (**{pct:.2f}%**)")
-
     # =========================
-    # FILTROS INTERACTIVOS
+    # FILTROS
     # =========================
     df = dataset.copy()
 
@@ -325,7 +295,6 @@ def render_eda(inv_df: Optional[pd.DataFrame],
     if enable_filters:
         cols = st.columns(3)
 
-        # Canal
         with cols[0]:
             if "Canal_Venta_norm" in df.columns:
                 canales = ["(Todos)"] + sorted([c for c in df["Canal_Venta_norm"].dropna().unique().tolist() if str(c).strip() != ""])
@@ -335,7 +304,6 @@ def render_eda(inv_df: Optional[pd.DataFrame],
             else:
                 st.caption("Sin Canal_Venta_norm")
 
-        # Categoría
         with cols[1]:
             if "Categoria" in df.columns:
                 cats = ["(Todas)"] + sorted([c for c in df["Categoria"].dropna().unique().tolist() if str(c).strip() != ""])
@@ -345,7 +313,6 @@ def render_eda(inv_df: Optional[pd.DataFrame],
             else:
                 st.caption("Sin Categoria")
 
-        # Fechas
         with cols[2]:
             if "Fecha_Venta_dt" in df.columns and df["Fecha_Venta_dt"].notna().any():
                 min_d = df["Fecha_Venta_dt"].min().date()
@@ -357,21 +324,47 @@ def render_eda(inv_df: Optional[pd.DataFrame],
             else:
                 st.caption("Sin Fecha_Venta válida")
 
+    # =========================
+    # EDA TOP: RESUMEN (cuantitativo)
+    # =========================
+    st.markdown("## 🧪 Resumen del dataset consolidado (EDA)")
+    n_rows, n_cols = df.shape
+    dups = duplicate_count(df)
+    n_num = len(numeric_cols(df))
+    n_cat = len(cat_cols(df))
+    null_cells = int(df.isna().sum().sum())
+    null_pct = float((null_cells / (n_rows * n_cols) * 100) if (n_rows * n_cols) else 0)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Filas", f"{n_rows:,}")
+    c2.metric("Columnas", f"{n_cols:,}")
+    c3.metric("Duplicados (fila exacta)", f"{dups:,}")
+    c4.metric("Numéricas", f"{n_num:,}")
+    c5.metric("Categóricas/Otras", f"{n_cat:,}")
+
+    st.caption(f"Nulos (celdas): {null_cells:,} ({null_pct:.2f}%)")
     st.caption(f"Filas tras filtros: {len(df):,}")
 
-    # Particiones (para KPIs / comparaciones)
-    controlados = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
-    fantasmas = df[df["SKU_Fantasma"] == True].copy() if "SKU_Fantasma" in df.columns else df.iloc[0:0].copy()
+    # Expander: describe primero
+    with st.expander("📋 Describe (cuantitativo + cualitativo)", expanded=True):
+        st.dataframe(df.describe(include="all").T, use_container_width=True, height=420)
+
+    with st.expander("👀 Vista previa (top 30)", expanded=False):
+        st.dataframe(df.head(30), use_container_width=True, height=380)
+
+    with st.expander("🧾 Perfil de nulos por columna", expanded=False):
+        st.dataframe(null_profile(df).head(40), use_container_width=True, height=420)
+
+    st.divider()
 
     # =========================
-    # DESCARGA DATASET CONSOLIDADO
+    # DESCARGA
     # =========================
     st.markdown("### ⬇️ Descargar dataset consolidado")
-    st.caption("Incluye joins + variables derivadas. Respeta los filtros aplicados arriba.")
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    st.caption("Incluye joins + variables derivadas. Respeta filtros activos.")
     st.download_button(
         "Descargar dataset_consolidado.csv",
-        data=csv_bytes,
+        data=df.to_csv(index=False).encode("utf-8"),
         file_name="dataset_consolidado.csv",
         mime="text/csv",
         use_container_width=True
@@ -380,9 +373,12 @@ def render_eda(inv_df: Optional[pd.DataFrame],
     st.divider()
 
     # =========================
-    # KPIs dinámicos
+    # KPIs (sin margen% medio)
     # =========================
-    st.markdown("### 📌 KPIs (según filtros)")
+    st.markdown("## 📌 KPIs ejecutivos (según filtros)")
+
+    controlados = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
+    fantasmas = df[df["SKU_Fantasma"] == True].copy() if "SKU_Fantasma" in df.columns else df.iloc[0:0].copy()
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
@@ -394,157 +390,241 @@ def render_eda(inv_df: Optional[pd.DataFrame],
     with k4:
         st.metric("Margen controlados", f"{safe_sum(controlados,'Margen_Utilidad'):,.2f}")
 
-    k5, k6, k7, k8 = st.columns(4)
+    k5, k6, k7 = st.columns(3)
     with k5:
-        st.metric("Margen % medio (ctrl)", f"{safe_mean(controlados,'Margen_%')*100:,.2f}%")
-    with k6:
         st.metric("Entrega tardía %", f"{float(df['Entrega_Tardia'].mean()*100) if 'Entrega_Tardia' in df.columns else np.nan:,.2f}%")
-    with k7:
+    with k6:
         st.metric("Stock insuficiente %", f"{float(df['Stock_Insuficiente'].mean()*100) if 'Stock_Insuficiente' in df.columns else np.nan:,.2f}%")
-    with k8:
+    with k7:
         st.metric("Tickets (suma)", f"{int(df['Ticket_Indicador'].sum()) if 'Ticket_Indicador' in df.columns else 0}")
 
     st.divider()
 
     # =========================
-    # GRÁFICOS (dinámicos)
+    # ANÁLISIS CUANTITATIVO / CUALITATIVO + VIZ INTERACTIVA
     # =========================
-    st.markdown("### 📊 Visualizaciones")
+    st.markdown("## 📊 Análisis (cuantitativo y cualitativo)")
 
-    chart = st.selectbox(
-        "Seleccione análisis",
-        options=[
-            "Distribución Margen (controlados)",
-            "Ingreso por Categoría (Top 10, controlados)",
-            "Entregas tardías (conteo)",
-            "Margen vs Costo Envío (controlados)",
-            "Margen % por Canal (controlados)",
-            "NPS vs Entrega tardía",
-            "Riesgo por Categoría (Top 10, controlados)",
-            "SKU fantasma: ciudades Top 10",
-            "Vista previa / describe"
-        ],
-        index=0
-    )
+    tab_q, tab_c, tab_viz = st.tabs(["Cuantitativo", "Cualitativo", "Visualización interactiva"])
 
-    if chart == "Distribución Margen (controlados)":
-        if "Margen_Utilidad" in controlados.columns:
-            fig = plt.figure()
-            plt.hist(controlados["Margen_Utilidad"].dropna(), bins=30)
-            plt.title("Distribución del Margen de Utilidad (SKUs controlados)")
-            plt.xlabel("Margen_Utilidad")
-            plt.ylabel("Número de ventas")
-            plt.tight_layout()
-            st.pyplot(fig)
+    # ---------- CUANTITATIVO ----------
+    with tab_q:
+        st.markdown("### Distribuciones y relaciones (numéricas)")
+
+        num = numeric_cols(df)
+        if not num:
+            st.info("No se detectaron columnas numéricas.")
         else:
-            st.info("No existe Margen_Utilidad en el dataset consolidado.")
+            col1, col2 = st.columns(2)
+            with col1:
+                x = st.selectbox("Variable numérica (X)", options=num, index=0)
+            with col2:
+                y = st.selectbox("Variable numérica (Y, opcional)", options=["(Ninguna)"] + num, index=0)
 
-    elif chart == "Ingreso por Categoría (Top 10, controlados)":
-        if {"Categoria", "Ingreso_Total"}.issubset(controlados.columns):
-            top = (controlados.groupby("Categoria")["Ingreso_Total"]
-                   .sum()
-                   .sort_values(ascending=False)
-                   .head(10))
-            fig = plt.figure()
-            top.plot(kind="bar")
-            plt.title("Ingreso Total por Categoría (Top 10, SKUs controlados)")
-            plt.xlabel("Categoría")
-            plt.ylabel("Ingreso_Total")
-            plt.tight_layout()
-            st.pyplot(fig)
-        else:
-            st.info("Faltan columnas Categoria/Ingreso_Total.")
+            chart_type = st.selectbox(
+                "Tipo de gráfico",
+                options=["Histograma", "Boxplot", "Scatter (X vs Y)", "Serie temporal (por fecha)"],
+                index=0
+            )
 
-    elif chart == "Entregas tardías (conteo)":
-        if "Entrega_Tardia" in df.columns:
-            vc = df["Entrega_Tardia"].value_counts(dropna=False)
-            fig = plt.figure()
-            vc.plot(kind="bar")
-            plt.title("Entregas tardías vs normales (conteo)")
-            plt.xlabel("Entrega_Tardia")
-            plt.ylabel("Número de ventas")
-            plt.tight_layout()
-            st.pyplot(fig)
-        else:
-            st.info("No existe Entrega_Tardia.")
-
-    elif chart == "Margen vs Costo Envío (controlados)":
-        if {"Margen_Utilidad", "Costo_Envio"}.issubset(controlados.columns):
-            fig = plt.figure()
-            plt.scatter(controlados["Costo_Envio"], controlados["Margen_Utilidad"], s=10)
-            plt.title("Margen vs Costo de Envío (SKUs controlados)")
-            plt.xlabel("Costo_Envio")
-            plt.ylabel("Margen_Utilidad")
-            plt.tight_layout()
-            st.pyplot(fig)
-        else:
-            st.info("Faltan columnas Margen_Utilidad/Costo_Envio.")
-
-    elif chart == "Margen % por Canal (controlados)":
-        if {"Canal_Venta_norm", "Margen_%"}.issubset(controlados.columns):
-            by = (controlados.groupby("Canal_Venta_norm")["Margen_%"]
-                  .mean()
-                  .sort_values(ascending=False))
-            fig = plt.figure()
-            by.plot(kind="bar")
-            plt.title("Margen % promedio por Canal (SKUs controlados)")
-            plt.xlabel("Canal_Venta_norm")
-            plt.ylabel("Margen_% promedio")
-            plt.tight_layout()
-            st.pyplot(fig)
-        else:
-            st.info("Faltan columnas Canal_Venta_norm/Margen_%.")
-
-    elif chart == "NPS vs Entrega tardía":
-        if {"Satisfaccion_NPS", "Entrega_Tardia"}.issubset(df.columns):
-            grp = df.groupby("Entrega_Tardia")["Satisfaccion_NPS"].mean()
-            fig = plt.figure()
-            grp.plot(kind="bar")
-            plt.title("NPS promedio: Entrega tardía vs normal")
-            plt.xlabel("Entrega_Tardia")
-            plt.ylabel("Satisfaccion_NPS promedio")
-            plt.tight_layout()
-            st.pyplot(fig)
-        else:
-            st.info("Faltan columnas Satisfaccion_NPS/Entrega_Tardia.")
-
-    elif chart == "Riesgo por Categoría (Top 10, controlados)":
-        if {"Categoria", "Riesgo_Operacion"}.issubset(controlados.columns):
-            vol = controlados["Categoria"].value_counts().head(10).index
-            sub = controlados[controlados["Categoria"].isin(vol)].copy()
-
-            risk_rate = (sub.assign(Riesgo_Alto=sub["Riesgo_Operacion"].eq("Alto"))
-                           .groupby("Categoria")["Riesgo_Alto"]
-                           .mean()
-                           .sort_values(ascending=False))
-            fig = plt.figure()
-            risk_rate.plot(kind="bar")
-            plt.title("Tasa de Riesgo Alto por Categoría")
-            plt.xlabel("Categoría")
-            plt.ylabel("Proporción Riesgo Alto")
-            plt.tight_layout()
-            st.pyplot(fig)
-        else:
-            st.info("Faltan columnas Categoria/Riesgo_Operacion.")
-
-    elif chart == "SKU fantasma: ciudades Top 10":
-        if "SKU_Fantasma" in df.columns and "Ciudad_Destino_norm" in df.columns:
-            top_c = df[df["SKU_Fantasma"] == True]["Ciudad_Destino_norm"].value_counts().head(10)
-            if len(top_c) > 0:
+            if chart_type == "Histograma":
                 fig = plt.figure()
-                top_c.plot(kind="bar")
-                plt.title("Top 10 ciudades con más ventas SKU fantasma")
-                plt.xlabel("Ciudad_Destino_norm")
-                plt.ylabel("Número de ventas fantasma")
+                plt.hist(pd.to_numeric(df[x], errors="coerce").dropna(), bins=30)
+                plt.title(f"Histograma: {x}")
+                plt.xlabel(x)
+                plt.ylabel("Frecuencia")
                 plt.tight_layout()
                 st.pyplot(fig)
-            else:
-                st.info("No hay registros fantasma (con los filtros actuales) o no hay ciudad normalizada.")
-        else:
-            st.info("Se requiere SKU_Fantasma y Ciudad_Destino_norm.")
 
-    elif chart == "Vista previa / describe":
-        st.markdown("#### Vista previa")
-        st.dataframe(df.head(30), use_container_width=True)
-        st.markdown("#### Describe")
-        st.dataframe(df.describe(include="all").T, use_container_width=True)
+            elif chart_type == "Boxplot":
+                fig = plt.figure()
+                plt.boxplot(pd.to_numeric(df[x], errors="coerce").dropna(), vert=True)
+                plt.title(f"Boxplot: {x}")
+                plt.ylabel(x)
+                plt.tight_layout()
+                st.pyplot(fig)
+
+            elif chart_type == "Scatter (X vs Y)":
+                if y == "(Ninguna)":
+                    st.info("Seleccione Y para usar scatter.")
+                else:
+                    xx = pd.to_numeric(df[x], errors="coerce")
+                    yy = pd.to_numeric(df[y], errors="coerce")
+                    mask = xx.notna() & yy.notna()
+                    fig = plt.figure()
+                    plt.scatter(xx[mask], yy[mask], s=10)
+                    plt.title(f"Scatter: {x} vs {y}")
+                    plt.xlabel(x)
+                    plt.ylabel(y)
+                    plt.tight_layout()
+                    st.pyplot(fig)
+
+                    corr = xx[mask].corr(yy[mask])
+                    st.caption(f"Correlación Pearson (sobre pares válidos): {corr:.4f}" if pd.notna(corr) else "Correlación no disponible.")
+
+            elif chart_type == "Serie temporal (por fecha)":
+                if "Fecha_Venta_dt" not in df.columns or df["Fecha_Venta_dt"].notna().sum() == 0:
+                    st.info("No hay Fecha_Venta_dt válida para serie temporal.")
+                else:
+                    agg = st.selectbox("Agregación", options=["sum", "mean", "count"], index=0)
+                    # agrupar por día
+                    tmp = df.dropna(subset=["Fecha_Venta_dt"]).copy()
+                    tmp["day"] = tmp["Fecha_Venta_dt"].dt.date
+                    if agg == "sum":
+                        s = tmp.groupby("day")[x].apply(lambda s: pd.to_numeric(s, errors="coerce").sum())
+                    elif agg == "mean":
+                        s = tmp.groupby("day")[x].apply(lambda s: pd.to_numeric(s, errors="coerce").mean())
+                    else:
+                        s = tmp.groupby("day")[x].apply(lambda s: pd.to_numeric(s, errors="coerce").notna().sum())
+
+                    fig = plt.figure()
+                    plt.plot(s.index.astype(str), s.values, marker="o")
+                    plt.title(f"Serie temporal ({agg}) de {x}")
+                    plt.xlabel("Día")
+                    plt.ylabel(f"{x} ({agg})")
+                    plt.xticks(rotation=45, ha="right")
+                    plt.tight_layout()
+                    st.pyplot(fig)
+
+        st.markdown("### Matriz de correlación (Top)")
+        if len(num) >= 2:
+            corr = df[num].apply(pd.to_numeric, errors="coerce").corr()
+            st.dataframe(corr.round(3), use_container_width=True, height=320)
+        else:
+            st.caption("No hay suficientes numéricas para correlación.")
+
+    # ---------- CUALITATIVO ----------
+    with tab_c:
+        st.markdown("### Frecuencias / composición (categóricas)")
+        cats = cat_cols(df)
+        if not cats:
+            st.info("No se detectaron columnas categóricas.")
+        else:
+            c = st.selectbox("Variable categórica", options=cats, index=0)
+            topn = st.slider("Top N", 5, 30, 10)
+            vc = df[c].astype(str).value_counts(dropna=False).head(topn)
+
+            st.dataframe(vc.rename("conteo").to_frame(), use_container_width=True)
+
+            fig = plt.figure()
+            vc.plot(kind="bar")
+            plt.title(f"Top {topn}: {c}")
+            plt.xlabel(c)
+            plt.ylabel("Conteo")
+            plt.xticks(rotation=45, ha="right")
+            plt.tight_layout()
+            st.pyplot(fig)
+
+        st.markdown("### SKU fantasma (cualitativo de control)")
+        if "SKU_Fantasma" in df.columns:
+            sku_f = int(df["SKU_Fantasma"].sum())
+            pct = (sku_f / len(df) * 100) if len(df) else 0
+            st.write(f"Ventas con SKU fantasma: **{sku_f:,}** (**{pct:.2f}%**)")
+
+            if {"Canal_Venta_norm", "Ingreso_Total"}.issubset(df.columns):
+                tab = (df.assign(es_fantasma=df["SKU_Fantasma"])
+                         .groupby(["Canal_Venta_norm", "es_fantasma"])["Ingreso_Total"]
+                         .sum()
+                         .unstack(fill_value=0))
+                st.dataframe(tab.sort_values(by=True if True in tab.columns else tab.columns[-1], ascending=False).head(15),
+                             use_container_width=True)
+
+    # ---------- VISUALIZACIÓN INTERACTIVA (elige gráfico que “mejor se ajuste”) ----------
+    with tab_viz:
+        st.markdown("### Constructor de gráficos (interactivo)")
+
+        num = numeric_cols(df)
+        cats = cat_cols(df)
+
+        viz_type = st.selectbox(
+            "Tipo de visualización",
+            options=[
+                "Univariado numérico",
+                "Univariado categórico",
+                "Bivariado (numérico vs numérico)",
+                "Bivariado (categórico vs numérico)",
+            ],
+            index=0
+        )
+
+        if viz_type == "Univariado numérico":
+            if not num:
+                st.info("No hay numéricas.")
+            else:
+                x = st.selectbox("Variable", options=num, index=0)
+                g = st.selectbox("Gráfico", options=["Histograma", "Boxplot"], index=0)
+                if g == "Histograma":
+                    fig = plt.figure()
+                    plt.hist(pd.to_numeric(df[x], errors="coerce").dropna(), bins=30)
+                    plt.title(f"Histograma: {x}")
+                    plt.xlabel(x); plt.ylabel("Frecuencia")
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                else:
+                    fig = plt.figure()
+                    plt.boxplot(pd.to_numeric(df[x], errors="coerce").dropna())
+                    plt.title(f"Boxplot: {x}")
+                    plt.ylabel(x)
+                    plt.tight_layout()
+                    st.pyplot(fig)
+
+        elif viz_type == "Univariado categórico":
+            if not cats:
+                st.info("No hay categóricas.")
+            else:
+                x = st.selectbox("Variable", options=cats, index=0)
+                topn = st.slider("Top N", 5, 40, 15)
+                vc = df[x].astype(str).value_counts(dropna=False).head(topn)
+                fig = plt.figure()
+                vc.plot(kind="bar")
+                plt.title(f"Top {topn}: {x}")
+                plt.xlabel(x); plt.ylabel("Conteo")
+                plt.xticks(rotation=45, ha="right")
+                plt.tight_layout()
+                st.pyplot(fig)
+
+        elif viz_type == "Bivariado (numérico vs numérico)":
+            if len(num) < 2:
+                st.info("Se requieren al menos 2 numéricas.")
+            else:
+                x = st.selectbox("X", options=num, index=0)
+                y = st.selectbox("Y", options=[c for c in num if c != x], index=0)
+                fig = plt.figure()
+                xx = pd.to_numeric(df[x], errors="coerce")
+                yy = pd.to_numeric(df[y], errors="coerce")
+                mask = xx.notna() & yy.notna()
+                plt.scatter(xx[mask], yy[mask], s=10)
+                plt.title(f"Scatter: {x} vs {y}")
+                plt.xlabel(x); plt.ylabel(y)
+                plt.tight_layout()
+                st.pyplot(fig)
+
+        else:  # categórico vs numérico
+            if not cats or not num:
+                st.info("Se requiere 1 categórica y 1 numérica.")
+            else:
+                x = st.selectbox("Categoría (X)", options=cats, index=0)
+                y = st.selectbox("Numérica (Y)", options=num, index=0)
+                agg = st.selectbox("Agregación", options=["mean", "sum", "count"], index=0)
+
+                tmp = df[[x, y]].copy()
+                tmp[x] = tmp[x].astype(str)
+                tmp[y] = pd.to_numeric(tmp[y], errors="coerce")
+
+                if agg == "count":
+                    s = tmp.groupby(x)[y].apply(lambda s: s.notna().sum()).sort_values(ascending=False).head(20)
+                    ylabel = f"{y} (count)"
+                elif agg == "sum":
+                    s = tmp.groupby(x)[y].sum().sort_values(ascending=False).head(20)
+                    ylabel = f"{y} (sum)"
+                else:
+                    s = tmp.groupby(x)[y].mean().sort_values(ascending=False).head(20)
+                    ylabel = f"{y} (mean)"
+
+                fig = plt.figure()
+                s.plot(kind="bar")
+                plt.title(f"{ylabel} por {x} (Top 20)")
+                plt.xlabel(x); plt.ylabel(ylabel)
+                plt.xticks(rotation=45, ha="right")
+                plt.tight_layout()
+                st.pyplot(fig)
