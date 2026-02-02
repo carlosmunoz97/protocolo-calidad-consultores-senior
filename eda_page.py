@@ -535,354 +535,354 @@ def render_eda(inv_df: Optional[pd.DataFrame],
     "Exploración"
 ])
 
-# =========================================================
-# TAB 1: EJECUTIVO
-# =========================================================
-with tab_exec:
-    st.markdown("### Ejecutivo")
-
-    exec_view = st.selectbox(
-        "Seleccione vista",
-        ["Rentabilidad por canal", "Venta invisible", "Concentración de pérdidas"],
-        index=0,
-        key="exec_view"
-    )
-
-    if exec_view == "Rentabilidad por canal":
-        if {"Margen_%", "Canal_Venta_norm"}.issubset(df.columns):
-            ctrl = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
-            tmp = ctrl.dropna(subset=["Canal_Venta_norm", "Margen_%"]).copy()
-
-            if tmp.empty:
-                st.info("No hay datos suficientes para calcular margen % por canal.")
-            else:
-                by = (tmp.groupby("Canal_Venta_norm")["Margen_%"]
-                        .mean()
-                        .sort_values(ascending=False)
-                        .head(12))
-                fig = barh_series(
-                    by,
-                    "Canales más rentables (margen % promedio)",
-                    "Margen %",
-                    percent=True
-                )
-                if fig:
-                    st.pyplot(fig)
-        else:
-            st.info("Faltan columnas (Canal_Venta_norm, Margen_%).")
-
-    elif exec_view == "Venta invisible":
-        if {"SKU_Fantasma", "Ingreso_Total"}.issubset(df.columns):
-            tmp = df.dropna(subset=["SKU_Fantasma", "Ingreso_Total"]).copy()
-            if tmp.empty:
-                st.info("No hay datos suficientes para calcular ingreso controlado vs fantasma.")
-            else:
-                ctrl_ing = safe_sum(tmp[tmp["SKU_Fantasma"] == False], "Ingreso_Total")
-                fan_ing = safe_sum(tmp[tmp["SKU_Fantasma"] == True], "Ingreso_Total")
-
-                fig, ax = plt.subplots(figsize=(6.5, 3.8))
-                ax.bar(["Controlado", "Fantasma"], [ctrl_ing, fan_ing], color=[NEUTRAL, ACCENT])
-                ax.set_title("Ingreso fuera del inventario (SKU fantasma)")
-                ax.set_ylabel("Ingreso total (USD)")
-                plt.tight_layout()
-                st.pyplot(fig)
-        else:
-            st.info("Faltan columnas (SKU_Fantasma, Ingreso_Total).")
-
-    else:  # Concentración de pérdidas
-        if {"SKU_ID", "Margen_Utilidad", "Transaccion_ID"}.issubset(df.columns):
-            ctrl = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
-            base = ctrl.dropna(subset=["SKU_ID", "Margen_Utilidad", "Transaccion_ID"]).copy()
-
-            if base.empty:
-                st.info("No hay datos suficientes para analizar pérdidas por SKU.")
-            else:
-                sku_kpi = (base.groupby("SKU_ID", as_index=False)
-                             .agg(Margen=("Margen_Utilidad", "sum")))
-
-                neg = sku_kpi[sku_kpi["Margen"] < 0].sort_values("Margen").head(15)
-                if neg.empty:
-                    st.caption("No hay pérdidas (según filtros).")
+    # =========================================================
+    # TAB 1: EJECUTIVO
+    # =========================================================
+    with tab_exec:
+        st.markdown("### Ejecutivo")
+    
+        exec_view = st.selectbox(
+            "Seleccione vista",
+            ["Rentabilidad por canal", "Venta invisible", "Concentración de pérdidas"],
+            index=0,
+            key="exec_view"
+        )
+    
+        if exec_view == "Rentabilidad por canal":
+            if {"Margen_%", "Canal_Venta_norm"}.issubset(df.columns):
+                ctrl = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
+                tmp = ctrl.dropna(subset=["Canal_Venta_norm", "Margen_%"]).copy()
+    
+                if tmp.empty:
+                    st.info("No hay datos suficientes para calcular margen % por canal.")
                 else:
-                    s = neg.set_index("SKU_ID")["Margen"].sort_values()  # más negativo arriba en barh ascendente
-                    fig, ax = plt.subplots(figsize=(8, 4.8))
-                    ax.barh(s.index.astype(str), s.values, color=RISK, alpha=0.9)
-                    ax.set_title("SKUs con pérdidas (margen total negativo)")
-                    ax.set_xlabel("Margen total (USD)")
-                    plt.tight_layout()
-                    st.pyplot(fig)
-        else:
-            st.info("Faltan columnas (SKU_ID, Margen_Utilidad, Transaccion_ID).")
-
-
-# =========================================================
-# TAB 2: OPERACIÓN
-# (usa el bloque corregido previamente, tal cual)
-# =========================================================
-with tab_ops:
-    st.markdown("### Operación")
-
-    op_view = st.selectbox(
-        "Seleccione vista",
-        [
-            "Impacto de entrega tardía en NPS",
-            "Quiebre de stock (tasa y categorías)",
-            "Cuellos de botella (ciudad / bodega)"
-        ],
-        index=0,
-        key="ops_view"
-    )
-
-    if op_view == "Impacto de entrega tardía en NPS":
-        if {"Entrega_Tardia", "Satisfaccion_NPS"}.issubset(df.columns):
-            tmp = df.dropna(subset=["Entrega_Tardia", "Satisfaccion_NPS"]).copy()
-            if tmp.empty:
-                st.info("No hay datos suficientes para comparar NPS por entrega tardía.")
-            else:
-                grp = tmp.groupby("Entrega_Tardia")["Satisfaccion_NPS"].mean().reindex([False, True]).dropna()
-                if grp.empty:
-                    st.info("No hay datos suficientes para calcular el NPS promedio por estado de entrega.")
-                else:
-                    fig, ax = plt.subplots(figsize=(6.5, 3.5))
-                    labels = ["Normal", "Tardía"][:len(grp)]
-                    colors = [NEUTRAL, ACCENT][:len(grp)]
-                    ax.bar(labels, grp.values, color=colors)
-                    ax.set_title("NPS promedio según entrega tardía")
-                    ax.set_ylabel("NPS promedio")
-                    plt.tight_layout()
-                    st.pyplot(fig)
-
-                    if (False in grp.index) and (True in grp.index):
-                        delta = float(grp.loc[False] - grp.loc[True])
-                        st.caption(f"Diferencia (Normal - Tardía): {delta:.2f} puntos de NPS.")
-        else:
-            st.info("Faltan columnas (Entrega_Tardia, Satisfaccion_NPS).")
-
-    elif op_view == "Quiebre de stock (tasa y categorías)":
-        if {"Stock_Insuficiente", "Categoria"}.issubset(df.columns):
-            tmp = df.dropna(subset=["Stock_Insuficiente", "Categoria"]).copy()
-            if tmp.empty:
-                st.info("No hay datos suficientes para evaluar quiebre de stock.")
-            else:
-                tasa = float(tmp["Stock_Insuficiente"].mean() * 100) if len(tmp) else np.nan
-                fig = kpi_tile_sm(
-                    "Riesgo de quiebre de stock",
-                    f"{tasa:.1f}%",
-                    "de transacciones con stock insuficiente",
-                    alert=(pd.notna(tasa) and tasa >= 10)
-                )
-                st.pyplot(fig)
-
-                ctrl = tmp[tmp["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in tmp.columns else tmp.copy()
-                if len(ctrl) > 0:
-                    top = (ctrl.assign(q=ctrl["Stock_Insuficiente"].astype(int))
-                              .groupby("Categoria")["q"].mean()
-                              .sort_values(ascending=False)
-                              .head(10))
+                    by = (tmp.groupby("Canal_Venta_norm")["Margen_%"]
+                            .mean()
+                            .sort_values(ascending=False)
+                            .head(12))
                     fig = barh_series(
-                        top,
-                        "Categorías con mayor quiebre de stock",
-                        "Tasa stock insuficiente",
+                        by,
+                        "Canales más rentables (margen % promedio)",
+                        "Margen %",
                         percent=True
                     )
                     if fig:
                         st.pyplot(fig)
-                else:
-                    st.caption("No hay transacciones controladas disponibles con los filtros actuales.")
-        else:
-            st.info("Faltan columnas (Stock_Insuficiente, Categoria).")
-
-    else:
-        min_n = st.slider("Mínimo de transacciones por grupo", 20, 200, 50, step=10, key="ops_min_n")
-        top_k = st.slider("Mostrar Top", 5, 20, 10, step=1, key="ops_top_k")
-
-        st.markdown("#### Ciudad destino")
-        if {"Ciudad_Destino_norm", "Tiempo_Entrega_Real", "Satisfaccion_NPS", "Transaccion_ID"}.issubset(df.columns):
-            log = df.dropna(subset=["Ciudad_Destino_norm", "Tiempo_Entrega_Real", "Satisfaccion_NPS", "Transaccion_ID"]).copy()
-            if log.empty:
-                st.info("No hay datos suficientes para análisis por ciudad.")
             else:
-                log["NPS_bajo"] = (pd.to_numeric(log["Satisfaccion_NPS"], errors="coerce") <= 0).astype(int)
-
-                stats_city = (log.groupby("Ciudad_Destino_norm")
-                                .agg(
-                                    n=("Transaccion_ID", "count"),
-                                    tiempo_prom=("Tiempo_Entrega_Real", "mean"),
-                                    tasa_nps_bajo=("NPS_bajo", "mean")
-                                ))
-
-                stats_city = stats_city[stats_city["n"] >= min_n].copy()
-                stats_city["score"] = stats_city["tasa_nps_bajo"].fillna(0) * stats_city["tiempo_prom"].fillna(0)
-                stats_city = stats_city.sort_values("score", ascending=False).head(top_k)
-
-                if stats_city.empty:
-                    st.caption("No hay ciudades con suficiente volumen bajo los filtros actuales.")
+                st.info("Faltan columnas (Canal_Venta_norm, Margen_%).")
+    
+        elif exec_view == "Venta invisible":
+            if {"SKU_Fantasma", "Ingreso_Total"}.issubset(df.columns):
+                tmp = df.dropna(subset=["SKU_Fantasma", "Ingreso_Total"]).copy()
+                if tmp.empty:
+                    st.info("No hay datos suficientes para calcular ingreso controlado vs fantasma.")
                 else:
-                    fig = barh_series(
-                        stats_city["tasa_nps_bajo"],
-                        "Ciudades con mayor proporción de NPS bajo",
-                        "Tasa NPS bajo",
-                        percent=True,
-                        highlight_last=False
+                    ctrl_ing = safe_sum(tmp[tmp["SKU_Fantasma"] == False], "Ingreso_Total")
+                    fan_ing = safe_sum(tmp[tmp["SKU_Fantasma"] == True], "Ingreso_Total")
+    
+                    fig, ax = plt.subplots(figsize=(6.5, 3.8))
+                    ax.bar(["Controlado", "Fantasma"], [ctrl_ing, fan_ing], color=[NEUTRAL, ACCENT])
+                    ax.set_title("Ingreso fuera del inventario (SKU fantasma)")
+                    ax.set_ylabel("Ingreso total (USD)")
+                    plt.tight_layout()
+                    st.pyplot(fig)
+            else:
+                st.info("Faltan columnas (SKU_Fantasma, Ingreso_Total).")
+    
+        else:  # Concentración de pérdidas
+            if {"SKU_ID", "Margen_Utilidad", "Transaccion_ID"}.issubset(df.columns):
+                ctrl = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
+                base = ctrl.dropna(subset=["SKU_ID", "Margen_Utilidad", "Transaccion_ID"]).copy()
+    
+                if base.empty:
+                    st.info("No hay datos suficientes para analizar pérdidas por SKU.")
+                else:
+                    sku_kpi = (base.groupby("SKU_ID", as_index=False)
+                                 .agg(Margen=("Margen_Utilidad", "sum")))
+    
+                    neg = sku_kpi[sku_kpi["Margen"] < 0].sort_values("Margen").head(15)
+                    if neg.empty:
+                        st.caption("No hay pérdidas (según filtros).")
+                    else:
+                        s = neg.set_index("SKU_ID")["Margen"].sort_values()  # más negativo arriba en barh ascendente
+                        fig, ax = plt.subplots(figsize=(8, 4.8))
+                        ax.barh(s.index.astype(str), s.values, color=RISK, alpha=0.9)
+                        ax.set_title("SKUs con pérdidas (margen total negativo)")
+                        ax.set_xlabel("Margen total (USD)")
+                        plt.tight_layout()
+                        st.pyplot(fig)
+            else:
+                st.info("Faltan columnas (SKU_ID, Margen_Utilidad, Transaccion_ID).")
+    
+    
+    # =========================================================
+    # TAB 2: OPERACIÓN
+    # (usa el bloque corregido previamente, tal cual)
+    # =========================================================
+    with tab_ops:
+        st.markdown("### Operación")
+    
+        op_view = st.selectbox(
+            "Seleccione vista",
+            [
+                "Impacto de entrega tardía en NPS",
+                "Quiebre de stock (tasa y categorías)",
+                "Cuellos de botella (ciudad / bodega)"
+            ],
+            index=0,
+            key="ops_view"
+        )
+    
+        if op_view == "Impacto de entrega tardía en NPS":
+            if {"Entrega_Tardia", "Satisfaccion_NPS"}.issubset(df.columns):
+                tmp = df.dropna(subset=["Entrega_Tardia", "Satisfaccion_NPS"]).copy()
+                if tmp.empty:
+                    st.info("No hay datos suficientes para comparar NPS por entrega tardía.")
+                else:
+                    grp = tmp.groupby("Entrega_Tardia")["Satisfaccion_NPS"].mean().reindex([False, True]).dropna()
+                    if grp.empty:
+                        st.info("No hay datos suficientes para calcular el NPS promedio por estado de entrega.")
+                    else:
+                        fig, ax = plt.subplots(figsize=(6.5, 3.5))
+                        labels = ["Normal", "Tardía"][:len(grp)]
+                        colors = [NEUTRAL, ACCENT][:len(grp)]
+                        ax.bar(labels, grp.values, color=colors)
+                        ax.set_title("NPS promedio según entrega tardía")
+                        ax.set_ylabel("NPS promedio")
+                        plt.tight_layout()
+                        st.pyplot(fig)
+    
+                        if (False in grp.index) and (True in grp.index):
+                            delta = float(grp.loc[False] - grp.loc[True])
+                            st.caption(f"Diferencia (Normal - Tardía): {delta:.2f} puntos de NPS.")
+            else:
+                st.info("Faltan columnas (Entrega_Tardia, Satisfaccion_NPS).")
+    
+        elif op_view == "Quiebre de stock (tasa y categorías)":
+            if {"Stock_Insuficiente", "Categoria"}.issubset(df.columns):
+                tmp = df.dropna(subset=["Stock_Insuficiente", "Categoria"]).copy()
+                if tmp.empty:
+                    st.info("No hay datos suficientes para evaluar quiebre de stock.")
+                else:
+                    tasa = float(tmp["Stock_Insuficiente"].mean() * 100) if len(tmp) else np.nan
+                    fig = kpi_tile_sm(
+                        "Riesgo de quiebre de stock",
+                        f"{tasa:.1f}%",
+                        "de transacciones con stock insuficiente",
+                        alert=(pd.notna(tasa) and tasa >= 10)
                     )
+                    st.pyplot(fig)
+    
+                    ctrl = tmp[tmp["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in tmp.columns else tmp.copy()
+                    if len(ctrl) > 0:
+                        top = (ctrl.assign(q=ctrl["Stock_Insuficiente"].astype(int))
+                                  .groupby("Categoria")["q"].mean()
+                                  .sort_values(ascending=False)
+                                  .head(10))
+                        fig = barh_series(
+                            top,
+                            "Categorías con mayor quiebre de stock",
+                            "Tasa stock insuficiente",
+                            percent=True
+                        )
+                        if fig:
+                            st.pyplot(fig)
+                    else:
+                        st.caption("No hay transacciones controladas disponibles con los filtros actuales.")
+            else:
+                st.info("Faltan columnas (Stock_Insuficiente, Categoria).")
+    
+        else:
+            min_n = st.slider("Mínimo de transacciones por grupo", 20, 200, 50, step=10, key="ops_min_n")
+            top_k = st.slider("Mostrar Top", 5, 20, 10, step=1, key="ops_top_k")
+    
+            st.markdown("#### Ciudad destino")
+            if {"Ciudad_Destino_norm", "Tiempo_Entrega_Real", "Satisfaccion_NPS", "Transaccion_ID"}.issubset(df.columns):
+                log = df.dropna(subset=["Ciudad_Destino_norm", "Tiempo_Entrega_Real", "Satisfaccion_NPS", "Transaccion_ID"]).copy()
+                if log.empty:
+                    st.info("No hay datos suficientes para análisis por ciudad.")
+                else:
+                    log["NPS_bajo"] = (pd.to_numeric(log["Satisfaccion_NPS"], errors="coerce") <= 0).astype(int)
+    
+                    stats_city = (log.groupby("Ciudad_Destino_norm")
+                                    .agg(
+                                        n=("Transaccion_ID", "count"),
+                                        tiempo_prom=("Tiempo_Entrega_Real", "mean"),
+                                        tasa_nps_bajo=("NPS_bajo", "mean")
+                                    ))
+    
+                    stats_city = stats_city[stats_city["n"] >= min_n].copy()
+                    stats_city["score"] = stats_city["tasa_nps_bajo"].fillna(0) * stats_city["tiempo_prom"].fillna(0)
+                    stats_city = stats_city.sort_values("score", ascending=False).head(top_k)
+    
+                    if stats_city.empty:
+                        st.caption("No hay ciudades con suficiente volumen bajo los filtros actuales.")
+                    else:
+                        fig = barh_series(
+                            stats_city["tasa_nps_bajo"],
+                            "Ciudades con mayor proporción de NPS bajo",
+                            "Tasa NPS bajo",
+                            percent=True,
+                            highlight_last=False
+                        )
+                        if fig:
+                            st.pyplot(fig)
+                        st.dataframe(stats_city[["n", "tiempo_prom", "tasa_nps_bajo", "score"]].round(3),
+                                     use_container_width=True)
+            else:
+                st.caption("No hay columnas suficientes para análisis por ciudad (Ciudad_Destino_norm, Tiempo_Entrega_Real, Satisfaccion_NPS, Transaccion_ID).")
+    
+            st.markdown("#### Bodega origen")
+            if {"Bodega_Origen", "Tiempo_Entrega_Real", "Satisfaccion_NPS", "Transaccion_ID"}.issubset(df.columns):
+                base = df.copy()
+                if "SKU_Fantasma" in base.columns:
+                    base = base[base["SKU_Fantasma"] == False].copy()
+    
+                bod = base.dropna(subset=["Bodega_Origen", "Tiempo_Entrega_Real", "Satisfaccion_NPS", "Transaccion_ID"]).copy()
+                if bod.empty:
+                    st.info("No hay datos suficientes para análisis por bodega.")
+                else:
+                    bod["NPS_bajo"] = (pd.to_numeric(bod["Satisfaccion_NPS"], errors="coerce") <= 0).astype(int)
+    
+                    stats_bod = (bod.groupby("Bodega_Origen")
+                                   .agg(
+                                       n=("Transaccion_ID", "count"),
+                                       tiempo_prom=("Tiempo_Entrega_Real", "mean"),
+                                       tasa_nps_bajo=("NPS_bajo", "mean")
+                                   ))
+    
+                    stats_bod = stats_bod[stats_bod["n"] >= min_n].copy()
+                    stats_bod["score"] = stats_bod["tasa_nps_bajo"].fillna(0) * stats_bod["tiempo_prom"].fillna(0)
+                    stats_bod = stats_bod.sort_values("score", ascending=False).head(top_k)
+    
+                    if stats_bod.empty:
+                        st.caption("No hay bodegas con suficiente volumen bajo los filtros actuales.")
+                    else:
+                        fig = barh_series(
+                            stats_bod["tasa_nps_bajo"],
+                            "Bodegas con mayor proporción de NPS bajo",
+                            "Tasa NPS bajo",
+                            percent=True,
+                            highlight_last=False
+                        )
+                        if fig:
+                            st.pyplot(fig)
+                        st.dataframe(stats_bod[["n", "tiempo_prom", "tasa_nps_bajo", "score"]].round(3),
+                                     use_container_width=True)
+            else:
+                st.caption("No hay columnas suficientes para análisis por bodega (Bodega_Origen, Tiempo_Entrega_Real, Satisfaccion_NPS, Transaccion_ID).")
+    
+    
+    # =========================================================
+    # TAB 3: EXPLORACIÓN
+    # =========================================================
+    with tab_data:
+        st.markdown("### Exploración")
+    
+        curated_num = [c for c in [
+            "Ingreso_Total", "Margen_Utilidad", "Margen_%", "Costo_Envio",
+            "Tiempo_Entrega_Real", "Lead_Time_Dias", "Stock_Actual", "Cantidad_Vendida",
+            "Satisfaccion_NPS", "Rating_Producto", "Rating_Logistica", "Ticket_Indicador"
+        ] if c in df.columns]
+    
+        curated_cat = [c for c in [
+            "Canal_Venta_norm", "Categoria", "Ciudad_Destino_norm", "Bodega_Origen", "Riesgo_Operacion"
+        ] if c in df.columns]
+    
+        chart = st.selectbox(
+            "Seleccione visualización",
+            options=[
+                "Distribución de una métrica",
+                "Top categorías por una métrica",
+                "Relación: costo envío vs margen",
+                "Serie temporal: métrica diaria"
+            ],
+            index=0,
+            key="explore_chart"
+        )
+    
+        if chart == "Distribución de una métrica":
+            if not curated_num:
+                st.info("No hay variables numéricas disponibles.")
+            else:
+                x = st.selectbox("Métrica", curated_num, index=0, key="explore_hist_x")
+                series = pd.to_numeric(df[x], errors="coerce").dropna()
+    
+                if series.empty:
+                    st.info("No hay datos suficientes para graficar la distribución.")
+                else:
+                    fig, ax = plt.subplots(figsize=(7, 4.2))
+                    ax.hist(series, bins=30, color=NEUTRAL)
+                    if x in ["Margen_Utilidad", "Margen_%"]:
+                        ax.axvline(0, linewidth=2, color=RISK, alpha=0.8)
+                    ax.set_title(f"Distribución de {x}")
+                    ax.set_xlabel(x)
+                    ax.set_ylabel("Frecuencia")
+                    plt.tight_layout()
+                    st.pyplot(fig)
+    
+        elif chart == "Top categorías por una métrica":
+            if not curated_cat or not curated_num:
+                st.info("Se requiere al menos 1 categórica y 1 numérica disponibles.")
+            else:
+                cat = st.selectbox("Categoría", curated_cat, index=0, key="explore_top_cat")
+                metric = st.selectbox("Métrica", curated_num, index=0, key="explore_top_metric")
+                agg = st.selectbox("Agregación", ["sum", "mean", "count"], index=0, key="explore_top_agg")
+                topn = st.slider("Top N", 5, 20, 10, key="explore_top_n")
+    
+                tmp = df[[cat, metric]].copy()
+                tmp[cat] = tmp[cat].astype(str)
+                tmp[metric] = pd.to_numeric(tmp[metric], errors="coerce")
+    
+                if agg == "sum":
+                    s = tmp.groupby(cat)[metric].sum().sort_values(ascending=False).head(topn)
+                    xlabel = f"{metric} (sum)"
+                elif agg == "mean":
+                    s = tmp.groupby(cat)[metric].mean().sort_values(ascending=False).head(topn)
+                    xlabel = f"{metric} (mean)"
+                else:
+                    s = tmp.groupby(cat)[metric].apply(lambda s: s.notna().sum()).sort_values(ascending=False).head(topn)
+                    xlabel = f"{metric} (count)"
+    
+                if s.empty:
+                    st.info("No hay datos suficientes para construir el Top.")
+                else:
+                    fig = barh_series(s, f"Top {topn} {cat} por {xlabel}", xlabel, highlight_last=True, percent=False)
                     if fig:
                         st.pyplot(fig)
-                    st.dataframe(stats_city[["n", "tiempo_prom", "tasa_nps_bajo", "score"]].round(3),
-                                 use_container_width=True)
-        else:
-            st.caption("No hay columnas suficientes para análisis por ciudad (Ciudad_Destino_norm, Tiempo_Entrega_Real, Satisfaccion_NPS, Transaccion_ID).")
-
-        st.markdown("#### Bodega origen")
-        if {"Bodega_Origen", "Tiempo_Entrega_Real", "Satisfaccion_NPS", "Transaccion_ID"}.issubset(df.columns):
-            base = df.copy()
-            if "SKU_Fantasma" in base.columns:
-                base = base[base["SKU_Fantasma"] == False].copy()
-
-            bod = base.dropna(subset=["Bodega_Origen", "Tiempo_Entrega_Real", "Satisfaccion_NPS", "Transaccion_ID"]).copy()
-            if bod.empty:
-                st.info("No hay datos suficientes para análisis por bodega.")
+    
+        elif chart == "Relación: costo envío vs margen":
+            if not {"Costo_Envio", "Margen_Utilidad"}.issubset(df.columns):
+                st.info("Faltan columnas (Costo_Envio, Margen_Utilidad).")
             else:
-                bod["NPS_bajo"] = (pd.to_numeric(bod["Satisfaccion_NPS"], errors="coerce") <= 0).astype(int)
-
-                stats_bod = (bod.groupby("Bodega_Origen")
-                               .agg(
-                                   n=("Transaccion_ID", "count"),
-                                   tiempo_prom=("Tiempo_Entrega_Real", "mean"),
-                                   tasa_nps_bajo=("NPS_bajo", "mean")
-                               ))
-
-                stats_bod = stats_bod[stats_bod["n"] >= min_n].copy()
-                stats_bod["score"] = stats_bod["tasa_nps_bajo"].fillna(0) * stats_bod["tiempo_prom"].fillna(0)
-                stats_bod = stats_bod.sort_values("score", ascending=False).head(top_k)
-
-                if stats_bod.empty:
-                    st.caption("No hay bodegas con suficiente volumen bajo los filtros actuales.")
+                ctrl = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
+                xx = pd.to_numeric(ctrl["Costo_Envio"], errors="coerce")
+                yy = pd.to_numeric(ctrl["Margen_Utilidad"], errors="coerce")
+                mask = xx.notna() & yy.notna()
+    
+                if mask.sum() == 0:
+                    st.info("No hay pares válidos para graficar (Costo_Envio vs Margen_Utilidad).")
                 else:
-                    fig = barh_series(
-                        stats_bod["tasa_nps_bajo"],
-                        "Bodegas con mayor proporción de NPS bajo",
-                        "Tasa NPS bajo",
-                        percent=True,
-                        highlight_last=False
+                    fig = scatter_clean(
+                        xx[mask], yy[mask],
+                        "Costo de envío vs margen (línea en 0 = pérdida)",
+                        "Costo_Envio (USD)", "Margen_Utilidad (USD)",
+                        add_h0=True
                     )
-                    if fig:
-                        st.pyplot(fig)
-                    st.dataframe(stats_bod[["n", "tiempo_prom", "tasa_nps_bajo", "score"]].round(3),
-                                 use_container_width=True)
-        else:
-            st.caption("No hay columnas suficientes para análisis por bodega (Bodega_Origen, Tiempo_Entrega_Real, Satisfaccion_NPS, Transaccion_ID).")
-
-
-# =========================================================
-# TAB 3: EXPLORACIÓN
-# =========================================================
-with tab_data:
-    st.markdown("### Exploración")
-
-    curated_num = [c for c in [
-        "Ingreso_Total", "Margen_Utilidad", "Margen_%", "Costo_Envio",
-        "Tiempo_Entrega_Real", "Lead_Time_Dias", "Stock_Actual", "Cantidad_Vendida",
-        "Satisfaccion_NPS", "Rating_Producto", "Rating_Logistica", "Ticket_Indicador"
-    ] if c in df.columns]
-
-    curated_cat = [c for c in [
-        "Canal_Venta_norm", "Categoria", "Ciudad_Destino_norm", "Bodega_Origen", "Riesgo_Operacion"
-    ] if c in df.columns]
-
-    chart = st.selectbox(
-        "Seleccione visualización",
-        options=[
-            "Distribución de una métrica",
-            "Top categorías por una métrica",
-            "Relación: costo envío vs margen",
-            "Serie temporal: métrica diaria"
-        ],
-        index=0,
-        key="explore_chart"
-    )
-
-    if chart == "Distribución de una métrica":
-        if not curated_num:
-            st.info("No hay variables numéricas disponibles.")
-        else:
-            x = st.selectbox("Métrica", curated_num, index=0, key="explore_hist_x")
-            series = pd.to_numeric(df[x], errors="coerce").dropna()
-
-            if series.empty:
-                st.info("No hay datos suficientes para graficar la distribución.")
+                    st.pyplot(fig)
+    
+        else:  # Serie temporal
+            if "Fecha_Venta_dt" not in df.columns or not df["Fecha_Venta_dt"].notna().any():
+                st.info("No hay Fecha_Venta_dt válida.")
+            elif not curated_num:
+                st.info("No hay métricas numéricas disponibles.")
             else:
-                fig, ax = plt.subplots(figsize=(7, 4.2))
-                ax.hist(series, bins=30, color=NEUTRAL)
-                if x in ["Margen_Utilidad", "Margen_%"]:
-                    ax.axvline(0, linewidth=2, color=RISK, alpha=0.8)
-                ax.set_title(f"Distribución de {x}")
-                ax.set_xlabel(x)
-                ax.set_ylabel("Frecuencia")
-                plt.tight_layout()
-                st.pyplot(fig)
-
-    elif chart == "Top categorías por una métrica":
-        if not curated_cat or not curated_num:
-            st.info("Se requiere al menos 1 categórica y 1 numérica disponibles.")
-        else:
-            cat = st.selectbox("Categoría", curated_cat, index=0, key="explore_top_cat")
-            metric = st.selectbox("Métrica", curated_num, index=0, key="explore_top_metric")
-            agg = st.selectbox("Agregación", ["sum", "mean", "count"], index=0, key="explore_top_agg")
-            topn = st.slider("Top N", 5, 20, 10, key="explore_top_n")
-
-            tmp = df[[cat, metric]].copy()
-            tmp[cat] = tmp[cat].astype(str)
-            tmp[metric] = pd.to_numeric(tmp[metric], errors="coerce")
-
-            if agg == "sum":
-                s = tmp.groupby(cat)[metric].sum().sort_values(ascending=False).head(topn)
-                xlabel = f"{metric} (sum)"
-            elif agg == "mean":
-                s = tmp.groupby(cat)[metric].mean().sort_values(ascending=False).head(topn)
-                xlabel = f"{metric} (mean)"
-            else:
-                s = tmp.groupby(cat)[metric].apply(lambda s: s.notna().sum()).sort_values(ascending=False).head(topn)
-                xlabel = f"{metric} (count)"
-
-            if s.empty:
-                st.info("No hay datos suficientes para construir el Top.")
-            else:
-                fig = barh_series(s, f"Top {topn} {cat} por {xlabel}", xlabel, highlight_last=True, percent=False)
+                x = st.selectbox("Métrica", curated_num, index=0, key="explore_ts_x")
+                agg = st.selectbox("Agregación", ["sum", "mean", "count"], index=0, key="explore_ts_agg")
+                fig = line_daily(
+                    df, "Fecha_Venta_dt", x, agg,
+                    title=f"Serie temporal diaria: {x} ({agg})",
+                    ylabel=f"{x} ({agg})"
+                )
                 if fig:
                     st.pyplot(fig)
-
-    elif chart == "Relación: costo envío vs margen":
-        if not {"Costo_Envio", "Margen_Utilidad"}.issubset(df.columns):
-            st.info("Faltan columnas (Costo_Envio, Margen_Utilidad).")
-        else:
-            ctrl = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
-            xx = pd.to_numeric(ctrl["Costo_Envio"], errors="coerce")
-            yy = pd.to_numeric(ctrl["Margen_Utilidad"], errors="coerce")
-            mask = xx.notna() & yy.notna()
-
-            if mask.sum() == 0:
-                st.info("No hay pares válidos para graficar (Costo_Envio vs Margen_Utilidad).")
-            else:
-                fig = scatter_clean(
-                    xx[mask], yy[mask],
-                    "Costo de envío vs margen (línea en 0 = pérdida)",
-                    "Costo_Envio (USD)", "Margen_Utilidad (USD)",
-                    add_h0=True
-                )
-                st.pyplot(fig)
-
-    else:  # Serie temporal
-        if "Fecha_Venta_dt" not in df.columns or not df["Fecha_Venta_dt"].notna().any():
-            st.info("No hay Fecha_Venta_dt válida.")
-        elif not curated_num:
-            st.info("No hay métricas numéricas disponibles.")
-        else:
-            x = st.selectbox("Métrica", curated_num, index=0, key="explore_ts_x")
-            agg = st.selectbox("Agregación", ["sum", "mean", "count"], index=0, key="explore_ts_agg")
-            fig = line_daily(
-                df, "Fecha_Venta_dt", x, agg,
-                title=f"Serie temporal diaria: {x} ({agg})",
-                ylabel=f"{x} ({agg})"
-            )
-            if fig:
-                st.pyplot(fig)
