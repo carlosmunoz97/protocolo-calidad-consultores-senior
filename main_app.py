@@ -799,26 +799,19 @@ st.session_state["files"] = files
 # =========================
 # MAIN TABS: AUDITORÍA / EDA
 # =========================
-tab_audit, tab_eda = st.tabs(["🧾 Auditoría de Calidad y Transparencia", "📈 EDA"])
+tab_audit, tab_eda, tab_groq = st.tabs(["🧾 Auditoría de Calidad y Transparencia", "📈 EDA", "🤖 Asistente"])
 
+with tab_groq:
+    st.caption("🤖 Asistente de análisis (Groq)")
+    
 with tab_eda:
-    st.caption("EDA interactivo basado en datasets cargados. Por defecto se usa la versión limpia (recomendada).")
+    st.caption("EDA interactivo basado en los datasets LIMPIOS generados por la auditoría.")
 
-    fuente = st.radio(
-        "Fuente para EDA",
-        options=["Limpios (recomendado)", "Crudos"],
-        index=0,
-        horizontal=True
-    )
-
-    raw_dfs = st.session_state.get("raw_dfs", {})
     clean_dfs = st.session_state.get("clean_dfs", {})
 
-    source_map = clean_dfs if fuente.startswith("Limpios") else raw_dfs
-
-    inv_df = source_map.get("Inventario")
-    trx_df = source_map.get("Transacciones")
-    fb_df  = source_map.get("Feedback")
+    inv_df = clean_dfs.get("Inventario")
+    trx_df = clean_dfs.get("Transacciones")
+    fb_df  = clean_dfs.get("Feedback")
 
     render_eda(inv_df, trx_df, fb_df)
 
