@@ -120,7 +120,7 @@ def _groq_recommendations(api_key: str, payload: Dict[str, Any], model: str) -> 
     resp = client.chat.completions.create(
         model=model,
         temperature=0.25,
-        max_tokens=900,  # un poco más para permitir 3+ párrafos
+        max_tokens=1200,  # un poco más para permitir 3+ párrafos
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
