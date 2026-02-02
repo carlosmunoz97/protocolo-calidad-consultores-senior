@@ -95,7 +95,7 @@ def _groq_recommendations(api_key: str, payload: Dict[str, Any], model: str) -> 
         "Enfoque: calidad de datos, control operacional, rentabilidad/logística y próximos pasos. "
         "Si hay KPIs agregados, interprételos y conviértalos en acciones concretas.\n\n"
         "Además, al final debe incluir una sección titulada exactamente: 'Plan de acción propuesto', "
-        "con 5 a 8 viñetas. Cada viñeta debe tener: (Prioridad P0/P1/P2) + (Horizonte 0-30, 31-60 o 61-90 días) "
+        "con 4 a 6 viñetas. Cada viñeta debe tener: (Prioridad P0/P1/P2) + (Horizonte 0-30, 31-60 o 61-90 días) "
         "+ una acción concreta + el resultado esperado (en una línea)."
     )
 
@@ -120,7 +120,7 @@ def _groq_recommendations(api_key: str, payload: Dict[str, Any], model: str) -> 
     resp = client.chat.completions.create(
         model=model,
         temperature=0.25,
-        max_tokens=1200,  # un poco más para permitir 3+ párrafos
+        max_tokens=1500,  # un poco más para permitir 3+ párrafos
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
