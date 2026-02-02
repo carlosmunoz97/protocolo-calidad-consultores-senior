@@ -614,7 +614,52 @@ def clean_feedback(fb: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
 # DATASET ROUTING
 # =========================
 def load_csv(uploaded_file) -> pd.DataFrame:
-    return pd.read_csv(uploaded_file)
+    """
+    Lectura robusta para Streamlit:
+    - resetea puntero
+    - detecta delimitador (',' vs ';' vs '\t')
+    - intenta encodings comunes
+    - evita 'No columns to parse' por stream vacío
+    """
+    if uploaded_file is None:
+        raise ValueError("uploaded_file es None")
+
+    # 1) Garantizar puntero al inicio (Streamlit UploadedFile es file-like)
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+
+    # 2) Leer bytes una vez
+    data = uploaded_file.getvalue()
+    if data is None or len(data) == 0:
+        raise ValueError("El archivo está vacío (0 bytes). Verifique el CSV subido.")
+
+    # 3) Decodificar con fallback
+    text = None
+    for enc in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            text = data.decode(enc)
+            break
+        except Exception:
+            continue
+    if text is None:
+        raise ValueError("No se pudo decodificar el CSV (encoding no soportado).")
+
+    # 4) Inferir separador por conteo en primeras líneas
+    sample = "\n".join(text.splitlines()[:20])
+    seps = [(",", sample.count(",")), (";", sample.count(";")), ("\t", sample.count("\t")), ("|", sample.count("|"))]
+    sep = max(seps, key=lambda x: x[1])[0]
+
+    # 5) Parsear con pandas desde string
+    from io import StringIO
+    df = pd.read_csv(StringIO(text), sep=sep)
+
+    # 6) Validación mínima
+    if df.shape[1] == 0:
+        raise ValueError("CSV leído pero sin columnas. Revise separador y formato del archivo.")
+
+    return df
 
 def process_dataset(df: pd.DataFrame, dtype: str) -> Tuple[pd.DataFrame, EthicalLog]:
     if dtype == "Inventario":
