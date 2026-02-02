@@ -1,4 +1,5 @@
 from eda_page import render_eda
+from groq_page import render_groq_assistant
 import io
 import json
 import re
@@ -803,6 +804,8 @@ tab_audit, tab_eda, tab_groq = st.tabs(["🧾 Auditoría de Calidad y Transparen
 
 with tab_groq:
     st.caption("🤖 Asistente de análisis (Groq)")
+    df_filtered = st.session_state.get("eda_filtered_df")
+    render_groq_assistant(df_filtered)
     
 with tab_eda:
     st.caption("EDA interactivo basado en los datasets LIMPIOS generados por la auditoría.")
