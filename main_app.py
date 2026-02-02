@@ -678,6 +678,79 @@ with st.sidebar:
 uploaded = [(inv_file, "Inventario"), (trx_file, "Transacciones"), (fb_file, "Feedback")]
 uploaded = [(f, t) for (f, t) in uploaded if f is not None]
 
+uploaded = [(inv_file, "Inventario"), (trx_file, "Transacciones"), (fb_file, "Feedback")]
+uploaded = [(f, t) for (f, t) in uploaded if f is not None]
+
+# =========================
+# PRE-PROCESS (shared for Audit + EDA)
+# =========================
+if not uploaded:
+    st.info("Suba al menos un archivo para comenzar.")
+    st.stop()
+
+# Inicializar state
+if "raw_dfs" not in st.session_state:
+    st.session_state["raw_dfs"] = {}
+if "clean_dfs" not in st.session_state:
+    st.session_state["clean_dfs"] = {}
+if "logs" not in st.session_state:
+    st.session_state["logs"] = {}
+if "metrics" not in st.session_state:
+    st.session_state["metrics"] = {}
+if "files" not in st.session_state:
+    st.session_state["files"] = {}
+
+raw_dfs = {}
+clean_dfs = {}
+logs = {}
+metrics = {}
+files = {}
+
+for (up, dtype) in uploaded:
+    try:
+        df_raw = load_csv(up)
+    except Exception as e:
+        st.error(f"[{dtype}] No se pudo leer el CSV: {e}")
+        continue
+
+    # Pre metrics
+    hs_before = health_score(df_raw)
+    nulls_before = audit_nulls_types(df_raw)
+    dup_before = duplicate_count(df_raw)
+    out_before = numeric_outlier_report(df_raw, iqr_factor=iqr_factor)
+
+    # Clean
+    df_clean, ethic_log = process_dataset(df_raw, dtype)
+
+    # Post metrics
+    hs_after = health_score(df_clean)
+    nulls_after = audit_nulls_types(df_clean)
+    dup_after = duplicate_count(df_clean)
+    out_after = numeric_outlier_report(df_clean, iqr_factor=iqr_factor)
+
+    raw_dfs[dtype] = df_raw
+    clean_dfs[dtype] = df_clean
+    logs[dtype] = ethic_log
+    metrics[dtype] = {
+        "file_name": up.name,
+        "hs_before": hs_before,
+        "hs_after": hs_after,
+        "nulls_before": nulls_before,
+        "nulls_after": nulls_after,
+        "dup_before": dup_before,
+        "dup_after": dup_after,
+        "out_before": out_before,
+        "out_after": out_after
+    }
+    files[dtype] = df_to_download_bytes(df_clean, encoding="utf-8")
+
+# Persistir en session_state (para que tab_eda siempre lo vea)
+st.session_state["raw_dfs"] = raw_dfs
+st.session_state["clean_dfs"] = clean_dfs
+st.session_state["logs"] = logs
+st.session_state["metrics"] = metrics
+st.session_state["files"] = files
+
 # =========================
 # MAIN TABS: AUDITORÍA / EDA
 # =========================
@@ -692,6 +765,9 @@ with tab_eda:
         index=0,
         horizontal=True
     )
+
+    raw_dfs = st.session_state.get("raw_dfs", {})
+    clean_dfs = st.session_state.get("clean_dfs", {})
 
     source_map = clean_dfs if fuente.startswith("Limpios") else raw_dfs
 
