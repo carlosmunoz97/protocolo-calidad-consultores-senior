@@ -93,13 +93,18 @@ def _groq_recommendations(api_key: str, payload: Dict[str, Any], model: str) -> 
         "No invente datos. No solicite datos adicionales. "
         "Salida: mínimo 3 párrafos (pueden ser más), cada párrafo con 4-6 líneas. "
         "Enfoque: calidad de datos, control operacional, rentabilidad/logística y próximos pasos. "
-        "Si hay KPIs agregados, interprételos y conviértalos en acciones concretas."
+        "Si hay KPIs agregados, interprételos y conviértalos en acciones concretas.\n\n"
+        "Además, al final debe incluir una sección titulada exactamente: 'Plan de acción propuesto', "
+        "con 5 a 8 viñetas. Cada viñeta debe tener: (Prioridad P0/P1/P2) + (Horizonte 0-30, 31-60 o 61-90 días) "
+        "+ una acción concreta + el resultado esperado (en una línea)."
     )
+
 
     user = (
         "Analice el siguiente RESUMEN ESTADÍSTICO (sin datos fila-a-fila) de un dataset filtrado por el usuario "
         "y genere recomendaciones estratégicas en tiempo real. "
-        "Incluya señales de alerta si detecta: alta nulidad, duplicados, sesgos por faltantes, o variables críticas incompletas.\n\n"
+        "Incluya señales de alerta si detecta: alta nulidad, duplicados, sesgos por faltantes, o variables críticas incompletas. "
+        "Al final incluya la sección 'Plan de acción propuesto' según el formato solicitado.\n\n"
         f"SHAPE: {payload['shape']}\n"
         f"DUPLICATES_ROWS: {payload['duplicates_rows']}\n"
         f"NULL_CELLS: {payload['null_cells']} ({payload['null_pct']}%)\n"
