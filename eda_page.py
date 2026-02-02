@@ -628,3 +628,5 @@ def render_eda(inv_df: Optional[pd.DataFrame],
                 plt.xticks(rotation=45, ha="right")
                 plt.tight_layout()
                 st.pyplot(fig)
+# Guardar df filtrado para que lo use el Asistente
+st.session_state["eda_filtered_df"] = df
