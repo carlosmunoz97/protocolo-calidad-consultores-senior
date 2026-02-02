@@ -156,18 +156,6 @@ def render_groq_assistant(df_filtered: Optional[pd.DataFrame]):
 
     st.divider()
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.write("**Dataset filtrado actual:**")
-        st.write(f"- Filas: **{len(df_filtered):,}**")
-        st.write(f"- Columnas: **{df_filtered.shape[1]:,}**")
-    with c2:
-        # (Se elimina el bloque de 'Salida esperada' como solicitó)
-        st.write("**Cobertura del análisis:**")
-        st.write("- Calidad de datos y riesgos")
-        st.write("- Operación y servicio (si aplica)")
-        st.write("- Rentabilidad y control (si aplica)")
-
     run = st.button("Generar recomendaciones", use_container_width=True, type="primary")
 
     if run:
