@@ -1,3 +1,4 @@
+from eda_page import render_eda
 import io
 import json
 import re
@@ -683,8 +684,22 @@ uploaded = [(f, t) for (f, t) in uploaded if f is not None]
 tab_audit, tab_eda = st.tabs(["🧾 Auditoría de Calidad y Transparencia", "📈 EDA"])
 
 with tab_eda:
-    st.subheader("EDA")
-    st.info("Aquí irá el EDA.")
+    st.caption("EDA interactivo basado en datasets cargados. Por defecto se usa la versión limpia (recomendada).")
+
+    fuente = st.radio(
+        "Fuente para EDA",
+        options=["Limpios (recomendado)", "Crudos"],
+        index=0,
+        horizontal=True
+    )
+
+    source_map = clean_dfs if fuente.startswith("Limpios") else raw_dfs
+
+    inv_df = source_map.get("Inventario")
+    trx_df = source_map.get("Transacciones")
+    fb_df  = source_map.get("Feedback")
+
+    render_eda(inv_df, trx_df, fb_df)
 
 with tab_audit:
     if not uploaded:
