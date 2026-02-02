@@ -1,4 +1,4 @@
-streamlit
+streamlit>=1.30
 pandas
 numpy
 matplotlib
@@ -10,6 +10,6 @@ python-dateutil
 statsmodels
 scikit-learn
 ftfy
-groq
 pyarrow
 openpyxl
+groq
