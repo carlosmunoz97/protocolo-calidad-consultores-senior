@@ -26,8 +26,8 @@ def _build_stat_payload(df: pd.DataFrame) -> Dict[str, Any]:
     describe_str = describe_all.to_string(max_rows=80, max_cols=30)
 
     # Top nulos por columna
-    null_profile = (df.isna().mean() * 100).sort_values(ascending=False).head(20)
-    null_str = null_profile.to_string()
+    null_prof = (df.isna().mean() * 100).sort_values(ascending=False).head(20)
+    null_str = null_prof.to_string()
 
     return {
         "shape": {"rows": n_rows, "cols": n_cols},
@@ -87,8 +87,8 @@ def render_groq_assistant(df_filtered: Optional[pd.DataFrame]):
     st.subheader("🤖 Asistente de análisis (Groq)")
 
     st.caption(
-        "Este asistente analiza **solo el resumen estadístico** del dataset filtrado (describe + métricas agregadas). "
-        "No se envían filas crudas."
+        "Este asistente genera recomendaciones en tiempo real con Llama-3 a partir de estadísticas agregadas "
+        "del dataset filtrado (no se envían filas crudas)."
     )
 
     if df_filtered is None or len(df_filtered) == 0:
@@ -96,14 +96,12 @@ def render_groq_assistant(df_filtered: Optional[pd.DataFrame]):
         st.caption("Vaya a la pestaña EDA, aplique filtros y luego vuelva aquí.")
         return
 
-    # --- UI: API KEY ---
     api_key = st.text_input(
         "Ingrese su Groq API Key",
         type="password",
-        help="Se usa solo durante la sesión. Recomendado: manejarla como secreto/variable de entorno en producción."
+        help="Se usa solo durante la sesión."
     )
 
-    # Modelo (según docs Groq; puede cambiar con el tiempo)
     model = st.selectbox(
         "Modelo Llama (Groq)",
         options=[
@@ -112,24 +110,17 @@ def render_groq_assistant(df_filtered: Optional[pd.DataFrame]):
             "llama3-70b-8192",
         ],
         index=0,
-        help="Seleccione el modelo. 70B suele dar mejor análisis; 8B es más rápido."
+        help="70B suele dar mejor análisis; 8B es más rápido."
     )
-
-    with st.expander("Ver resumen que se enviará al modelo (solo estadísticos)", expanded=False):
-        payload = _build_stat_payload(df_filtered)
-        st.json({k: payload[k] for k in ["shape", "duplicates_rows", "null_cells", "null_pct", "dtypes_counts"]})
-        st.text("TOP NULLS (%):\n" + payload["top_nulls_pct"])
-        st.text("DESCRIBE:\n" + payload["describe"])
 
     st.divider()
 
-    colA, colB = st.columns([1, 1])
-    with colA:
+    c1, c2 = st.columns(2)
+    with c1:
         st.write("**Dataset filtrado actual:**")
         st.write(f"- Filas: **{len(df_filtered):,}**")
         st.write(f"- Columnas: **{df_filtered.shape[1]:,}**")
-
-    with colB:
+    with c2:
         st.write("**Salida esperada:**")
         st.write("- 3 párrafos")
         st.write("- Recomendaciones accionables")
@@ -151,9 +142,8 @@ def render_groq_assistant(df_filtered: Optional[pd.DataFrame]):
                 st.error(f"Error llamando Groq: {e}")
                 return
 
-        st.markdown("### Recomendación estratégica (3 párrafos)")
+        st.markdown("### Recomendación estratégica")
         st.write(text)
 
-        # Guardar en session_state por conveniencia
         st.session_state["groq_last_response"] = text
         st.session_state["groq_last_model"] = model
