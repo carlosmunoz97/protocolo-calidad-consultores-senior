@@ -323,7 +323,8 @@ def render_eda(inv_df: Optional[pd.DataFrame],
                     df = df[(df["Fecha_Venta_dt"].dt.date >= d1) & (df["Fecha_Venta_dt"].dt.date <= d2)].copy()
             else:
                 st.caption("Sin Fecha_Venta válida")
-
+                
+    st.session_state["eda_filtered_df"] = df.copy()
     # =========================
     # EDA TOP: RESUMEN (cuantitativo)
     # =========================
@@ -628,5 +629,3 @@ def render_eda(inv_df: Optional[pd.DataFrame],
                 plt.xticks(rotation=45, ha="right")
                 plt.tight_layout()
                 st.pyplot(fig)
-# Guardar df filtrado para que lo use el Asistente
-st.session_state["eda_filtered_df"] = df
