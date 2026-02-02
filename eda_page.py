@@ -32,16 +32,34 @@ plt.rcParams.update({
     "ytick.labelsize": 9,
 })
 
-def kpi_tile_sm(title: str, value_text: str, subtitle: str, alert: bool = False):
-    """Tile compacto para 3 por fila."""
-    fig, ax = plt.subplots(figsize=(4.2, 1.9))
+def kpi_tile(title: str, value_text: str, subtitle: str, alert: bool = False, small: bool = False):
+    """
+    Tile KPI consistente.
+    - alert=True pinta el valor en rojo (RISK).
+    - small=True reduce tamaño (por si quiere más compacto).
+    """
+    w, h = (5.8, 1.9) if small else (6.6, 2.2)
+    vsize = 28 if small else 34
+    ssize = 10 if small else 12
+
+    fig, ax = plt.subplots(figsize=(w, h))
     ax.axis("off")
+
     color = RISK if alert else ACCENT
-    ax.text(0.5, 0.62, value_text, ha="center", va="center",
-            fontsize=26, fontweight="bold", color=color, transform=ax.transAxes)
-    ax.text(0.5, 0.23, subtitle, ha="center", va="center",
-            fontsize=10, color="#333", transform=ax.transAxes)
-    ax.set_title(title, pad=6)
+
+    ax.text(
+        0.5, 0.68, value_text,
+        ha="center", va="center",
+        fontsize=vsize, fontweight="bold",
+        color=color, transform=ax.transAxes
+    )
+    ax.text(
+        0.5, 0.28, subtitle,
+        ha="center", va="center",
+        fontsize=ssize, color="#333",
+        transform=ax.transAxes
+    )
+    ax.set_title(title, pad=8, fontweight="bold")
     plt.tight_layout()
     return fig
 
@@ -461,67 +479,127 @@ def render_eda(inv_df: Optional[pd.DataFrame],
     st.divider()
 
     # =========================
-    # KPIs (sin margen% medio)
+    # KPIs
     # =========================
-    st.markdown("## 📌 KPIs ejecutivos")
-
+    st.markdown("## 📌 KPIs (según filtros)")
+    
+    # Particiones útiles
     controlados = df[df["SKU_Fantasma"] == False].copy() if "SKU_Fantasma" in df.columns else df.copy()
     fantasmas = df[df["SKU_Fantasma"] == True].copy() if "SKU_Fantasma" in df.columns else df.iloc[0:0].copy()
-
-    # --- cálculos ---
-    total_ing = safe_sum(df, "Ingreso_Total")
-    ctrl_ing = safe_sum(controlados, "Ingreso_Total")
-    fan_ing = safe_sum(fantasmas, "Ingreso_Total")
-    ctrl_margen = safe_sum(controlados, "Margen_Utilidad")
-
-    tardia_pct = float(df["Entrega_Tardia"].mean() * 100) if "Entrega_Tardia" in df.columns and len(df) else np.nan
-    stock_pct = float(df["Stock_Insuficiente"].mean() * 100) if "Stock_Insuficiente" in df.columns and len(df) else np.nan
-    tickets_sum = int(df["Ticket_Indicador"].sum()) if "Ticket_Indicador" in df.columns else 0
-
-    fan_pct = (fan_ing / total_ing * 100) if total_ing > 0 else np.nan
-
-    # --- fila 1 ---
-    a, b, c = st.columns(3)
-    with a:
-        st.pyplot(kpi_tile_sm("Ingreso total", f"{total_ing:,.0f}", "USD", alert=False))
-    with b:
-        st.pyplot(kpi_tile_sm("Margen controlados", f"{ctrl_margen:,.0f}", "USD", alert=(ctrl_margen < 0)))
-    with c:
-        st.pyplot(kpi_tile_sm("Confiabilidad logística", f"{tardia_pct:.1f}%", "entrega tardía", alert=(tardia_pct >= 20)))
-
-    # --- fila 2 ---
-    d, e, f = st.columns(3)
-    with d:
-        st.pyplot(kpi_tile_sm("Stock insuficiente", f"{stock_pct:.1f}%", "transacciones", alert=(stock_pct >= 10)))
-    with e:
-        st.pyplot(kpi_tile_sm("Venta invisible", f"{fan_pct:.1f}%", "ingreso SKU fantasma", alert=(fan_pct >= 10)))
-    with f:
-        st.pyplot(kpi_tile_sm("Tickets", f"{tickets_sum:,}", "abiertos", alert=(tickets_sum >= 100)))
-
-        # KPI tile 1: Confiabilidad logística
-    if "Entrega_Tardia" in df.columns and len(df) > 0:
-        tardia = float(df["Entrega_Tardia"].mean() * 100)
+    
+    # ---------- KPI fila 1 (3 por fila) ----------
+    kpi1, kpi2, kpi3 = st.columns(3)
+    
+    with kpi1:
+        total_ing = safe_sum(df, "Ingreso_Total")
         fig = kpi_tile(
-            "Confiabilidad logística",
-            f"{tardia:.1f}%",
-            "de transacciones tienen entrega tardía",
-            alert=(tardia >= 20)  # umbral ejemplo
+            "Ingreso total",
+            f"{total_ing:,.2f}",
+            "suma de Ingreso_Total",
+            alert=False,
+            small=True
         )
         st.pyplot(fig)
     
-    # KPI tile 2: Venta invisible (SKU fantasma)
-    if "SKU_Fantasma" in df.columns and "Ingreso_Total" in df.columns and len(df) > 0:
-        total_ing = safe_sum(df, "Ingreso_Total")
-        ing_fant = safe_sum(df[df["SKU_Fantasma"] == True], "Ingreso_Total")
-        pct = (ing_fant / total_ing * 100) if total_ing > 0 else np.nan
+    with kpi2:
+        ctrl_ing = safe_sum(controlados, "Ingreso_Total")
         fig = kpi_tile(
-            "Venta invisible",
-            f"{pct:.1f}%",
-            "del ingreso está fuera del inventario (SKU fantasma)",
-            alert=(pct >= 10)
+            "Ingreso controlados",
+            f"{ctrl_ing:,.2f}",
+            "SKUs presentes en inventario",
+            alert=False,
+            small=True
         )
         st.pyplot(fig)
-
+    
+    with kpi3:
+        if "SKU_Fantasma" in df.columns and total_ing > 0:
+            ing_fant = safe_sum(fantasmas, "Ingreso_Total")
+            pct_fant = (ing_fant / total_ing) * 100
+            fig = kpi_tile(
+                "Venta invisible",
+                f"{pct_fant:.1f}%",
+                "del ingreso está fuera del inventario",
+                alert=(pct_fant >= 10),
+                small=True
+            )
+            st.pyplot(fig)
+        else:
+            fig = kpi_tile(
+                "Venta invisible",
+                "N/D",
+                "requiere SKU_Fantasma e Ingreso_Total",
+                alert=False,
+                small=True
+            )
+            st.pyplot(fig)
+    
+    # ---------- KPI fila 2 (3 por fila) ----------
+    kpi4, kpi5, kpi6 = st.columns(3)
+    
+    with kpi4:
+        # Confiabilidad logística (Entrega tardía %)
+        if "Entrega_Tardia" in df.columns and len(df) > 0:
+            tardia = float(df["Entrega_Tardia"].mean() * 100)
+            fig = kpi_tile(
+                "Confiabilidad logística",
+                f"{tardia:.1f}%",
+                "transacciones con entrega tardía",
+                alert=(tardia >= 20),
+                small=True
+            )
+            st.pyplot(fig)
+        else:
+            fig = kpi_tile(
+                "Confiabilidad logística",
+                "N/D",
+                "requiere Entrega_Tardia",
+                small=True
+            )
+            st.pyplot(fig)
+    
+    with kpi5:
+        # Quiebre de stock %
+        if "Stock_Insuficiente" in df.columns and len(df) > 0:
+            tasa_stock = float(df["Stock_Insuficiente"].mean() * 100)
+            fig = kpi_tile(
+                "Quiebre de stock",
+                f"{tasa_stock:.1f}%",
+                "transacciones con stock insuficiente",
+                alert=(tasa_stock >= 10),
+                small=True
+            )
+            st.pyplot(fig)
+        else:
+            fig = kpi_tile(
+                "Quiebre de stock",
+                "N/D",
+                "requiere Stock_Insuficiente",
+                small=True
+            )
+            st.pyplot(fig)
+    
+    with kpi6:
+        # Tickets (suma)
+        if "Ticket_Indicador" in df.columns:
+            tks = int(pd.to_numeric(df["Ticket_Indicador"], errors="coerce").fillna(0).sum())
+            fig = kpi_tile(
+                "Tickets",
+                f"{tks:,}",
+                "total tickets abiertos",
+                alert=False,
+                small=True
+            )
+            st.pyplot(fig)
+        else:
+            fig = kpi_tile(
+                "Tickets",
+                "N/D",
+                "requiere Ticket_Indicador",
+                small=True
+            )
+            st.pyplot(fig)
+    
     st.divider()
 
        # =========================
