@@ -308,10 +308,30 @@ def build_unified_dataset(inv: pd.DataFrame, trx: pd.DataFrame, fb: pd.DataFrame
         "Normal"
     )
 
+    # --- Normalización base ---
     for col in ["Ciudad_Destino", "Canal_Venta"]:
         if col in dataset.columns:
             dataset[f"{col}_norm"] = dataset[col].apply(normalize_text_full)
-
+    
+    # --- Aliases de ciudades (para evitar 'bog' vs 'bogota') ---
+    city_aliases = {
+        "med": "medellin",
+        "mde": "medellin",
+        "medell": "medellin",
+        "bog": "bogota",
+        "bta": "bogota",
+        "bgta": "bogota"
+    }
+    
+    if "Ciudad_Destino_norm" in dataset.columns:
+        dataset["Ciudad_Destino_norm"] = (
+            dataset["Ciudad_Destino_norm"]
+            .astype("string")
+            .str.strip()
+            .apply(normalize_text_full)
+        )
+        dataset["Ciudad_Destino_norm"] = dataset["Ciudad_Destino_norm"].replace(city_aliases)
+    
     ensure_dt(dataset, "Fecha_Venta", "Fecha_Venta_dt")
     ensure_dt(dataset, "Ultima_Revision", "Ultima_Revision_dt")
 
@@ -743,11 +763,12 @@ def render_eda(inv_df: Optional[pd.DataFrame],
                     st.info("No hay datos suficientes para evaluar quiebre de stock.")
                 else:
                     tasa = float(tmp["Stock_Insuficiente"].mean() * 100) if len(tmp) else np.nan
-                    fig = kpi_tile_sm(
+                    fig = kpi_tile(
                         "Riesgo de quiebre de stock",
                         f"{tasa:.1f}%",
                         "de transacciones con stock insuficiente",
-                        alert=(pd.notna(tasa) and tasa >= 10)
+                        alert=(pd.notna(tasa) and tasa >= 10),
+                        small=True
                     )
                     st.pyplot(fig)
 
