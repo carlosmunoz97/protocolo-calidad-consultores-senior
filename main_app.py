@@ -360,6 +360,7 @@ def normalize_text_full(s):
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
+
 def build_fuzzy_map(values: pd.Series, threshold=0.9):
     values = sorted(set(values.dropna().astype(str)))
     canonical, mapping = [], {}
@@ -373,60 +374,70 @@ def build_fuzzy_map(values: pd.Series, threshold=0.9):
             mapping[v] = v
     return mapping
 
-def clean_numeric_outliers_winsorize(df: pd.DataFrame, numeric_cols: List[str], iqr_factor=1.5) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+
+def clean_numeric_outliers_winsorize(
+    df: pd.DataFrame,
+    numeric_cols: List[str],
+    iqr_factor=1.5
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     df_clean = df.copy()
     report = {"iqr_factor": iqr_factor, "columns": {}}
+
     for col in numeric_cols:
         series = df_clean[col]
         s = series.dropna()
         if s.empty:
             report["columns"][col] = {"clipped": 0}
             continue
+
         q1, q3 = s.quantile(0.25), s.quantile(0.75)
         iqr = q3 - q1
         if iqr == 0:
             report["columns"][col] = {"clipped": 0}
             continue
+
         lower, upper = q1 - iqr_factor * iqr, q3 + iqr_factor * iqr
         before = series.copy()
+
         df_clean[col] = series.clip(lower, upper)
         clipped = int((before != df_clean[col]).sum())
+
         df_clean[col] = df_clean[col].fillna(s.median())
-        report["columns"][col] = {"clipped": clipped, "lower": float(lower), "upper": float(upper)}
+        report["columns"][col] = {
+            "clipped": clipped,
+            "lower": float(lower),
+            "upper": float(upper)
+        }
+
     return df_clean, report
+
 
 def clean_transacciones(trx: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
     log = EthicalLog(dataset_name="Transacciones")
     df = trx.copy()
 
+    # -------------------------
+    # Reglas específicas
+    # -------------------------
     if "Cantidad_Vendida" in df.columns:
         n_neg5 = int((df["Cantidad_Vendida"] == -5).sum())
         df["Cantidad_Vendida"] = df["Cantidad_Vendida"].replace(-5, 5)
         if n_neg5:
             log.outlier_handling.append({
-                "column": "Cantidad_Vendida", "rule": "-5 -> 5", "n_affected": n_neg5,
+                "column": "Cantidad_Vendida",
+                "rule": "-5 -> 5",
+                "n_affected": n_neg5,
                 "ethical_justification": "Corrección de codificación; cantidad negativa específica mapeada a su magnitud."
             })
-
-    city_aliases = {"med": "medellin", "mde": "medellin", "medell": "medellin",
-                "bog": "bogota", "bta": "bogota", "bgta": "bogota"}
-
-    for col in ["Ciudad_Destino", "Canal_Venta"]:
-        if col in df.columns:
-            df[f"{col}_norm"] = df[col].apply(normalize_text_full)
-    
-    if "Ciudad_Destino_norm" in df.columns:
-        df["Ciudad_Destino_norm"] = df["Ciudad_Destino_norm"].replace(city_aliases)
-        city_map = build_fuzzy_map(df["Ciudad_Destino_norm"], threshold=0.9)
-        df["Ciudad_Destino_norm"] = df["Ciudad_Destino_norm"].map(city_map)
-        log.notes.append("Normalización Ciudad_Destino: aliases + fuzzy matching (threshold=0.9).")
 
     if "Tiempo_Entrega_Real" in df.columns:
         n_999 = int((df["Tiempo_Entrega_Real"] == 999).sum())
         df["Tiempo_Entrega_Real"] = df["Tiempo_Entrega_Real"].replace(999, np.nan)
         if n_999:
             log.outlier_handling.append({
-                "column": "Tiempo_Entrega_Real", "rule": "999 -> NaN", "n_affected": n_999,
+                "column": "Tiempo_Entrega_Real",
+                "rule": "999 -> NaN",
+                "n_affected": n_999,
                 "ethical_justification": "999 usado como centinela; se convierte a faltante para imputación."
             })
 
@@ -437,43 +448,79 @@ def clean_transacciones(trx: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
         df.loc[df["Fecha_Venta"] > TODAY, "Fecha_Venta"] = pd.NaT
         if n_future:
             log.outlier_handling.append({
-                "column": "Fecha_Venta", "rule": f"> {TODAY.date()} -> NaT", "n_affected": n_future,
+                "column": "Fecha_Venta",
+                "rule": f"> {TODAY.date()} -> NaT",
+                "n_affected": n_future,
                 "ethical_justification": "Fechas futuras son inconsistentes con registro histórico; se anulan para consistencia."
             })
 
+    # -------------------------
+    # Estándar de vacíos
+    # -------------------------
     EMPTY_VALUES = ["", " ", "nan", "NaN", "null", "NULL", "none", "None", "?", "-", "--"]
     df = df.replace(EMPTY_VALUES, np.nan).replace(r"^\s*$", np.nan, regex=True)
     log.notes.append("Estandarización de vacíos: ['', 'nan', 'null', '?', '--', espacios] -> NaN.")
 
-    city_aliases = {"med": "medellin", "mde": "medellin", "medell": "medellin",
-                    "bog": "bogota", "bta": "bogota", "bgta": "bogota"}
+    # -------------------------
+    # Normalización robusta de Ciudad_Destino y Canal_Venta (UNA SOLA VEZ)
+    # -------------------------
     for col in ["Ciudad_Destino", "Canal_Venta"]:
         if col in df.columns:
             df[f"{col}_norm"] = df[col].apply(normalize_text_full)
 
+    city_aliases = {
+        "med": "medellin",
+        "mde": "medellin",
+        "medell": "medellin",
+        "bog": "bogota",
+        "bta": "bogota",
+        "bgta": "bogota"
+    }
+
     if "Ciudad_Destino_norm" in df.columns:
+        # Limpieza extra para capturar "bog " / "bog\u00a0" / etc.
+        df["Ciudad_Destino_norm"] = (
+            df["Ciudad_Destino_norm"]
+            .astype("string")
+            .str.strip()
+            .apply(normalize_text_full)
+        )
+
+        # Aliases primero (bog -> bogota)
         df["Ciudad_Destino_norm"] = df["Ciudad_Destino_norm"].replace(city_aliases)
+
+        # Fuzzy después, para variantes residuales
         city_map = build_fuzzy_map(df["Ciudad_Destino_norm"], threshold=0.9)
         df["Ciudad_Destino_norm"] = df["Ciudad_Destino_norm"].map(city_map)
-        log.notes.append("Normalización Ciudad_Destino: aliases + fuzzy matching (threshold=0.9).")
 
+        log.notes.append("Normalización Ciudad_Destino: normalize_text_full + aliases + fuzzy matching (threshold=0.9).")
+
+    # -------------------------
     # Eliminar filas con >=2 nulos
+    # -------------------------
     before_idx = df.index
     before_len = len(df)
+
     df = df[df.isna().sum(axis=1) < 2].copy()
     dropped = before_len - len(df)
+
     if dropped > 0:
         dropped_idx = before_idx.difference(df.index)[:20].tolist()
         log.dropped_rows = int(dropped)
         log.dropped_rows_reason = "Eliminación de registros con >=2 nulos (imputación extensiva aumenta incertidumbre)."
-        # FIX: no astype(int)
         log.dropped_row_indices_sample = dropped_idx
 
+    # -------------------------
+    # Duplicados
+    # -------------------------
     dup_before = duplicate_count(df)
     if dup_before > 0:
         df = df.drop_duplicates().copy()
         log.duplicates_removed = int(dup_before)
 
+    # -------------------------
+    # Numéricos: imputación + winsorize
+    # -------------------------
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
     if numeric_cols:
         n_missing_num = int(df[numeric_cols].isna().sum().sum())
@@ -496,13 +543,20 @@ def clean_transacciones(trx: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
             "ethical_justification": "Se limita influencia de extremos preservando registros y reduciendo distorsión."
         })
 
+    # -------------------------
     # RandomForest para Estado_Envio
+    # -------------------------
     col_obj = "Estado_Envio"
     cols_base = ["Cantidad_Vendida", "Precio_Venta_Final", "Costo_Envio", "Tiempo_Entrega_Real"]
+
     if col_obj in df.columns and all(c in df.columns for c in cols_base):
         if df[col_obj].isna().any():
             imp_simple = SimpleImputer(strategy="median")
-            X_val = pd.DataFrame(imp_simple.fit_transform(df[cols_base]), index=df.index, columns=cols_base)
+            X_val = pd.DataFrame(
+                imp_simple.fit_transform(df[cols_base]),
+                index=df.index,
+                columns=cols_base
+            )
 
             train_idx = df[df[col_obj].notna()].index
             predict_idx = df[df[col_obj].isna()].index
@@ -524,6 +578,7 @@ def clean_transacciones(trx: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
                 fill = mode_val.iloc[0] if len(mode_val) else "Desconocido"
                 n_pred = int(df[col_obj].isna().sum())
                 df[col_obj] = df[col_obj].fillna(fill)
+
                 log.imputations.append({
                     "column": col_obj,
                     "strategy": "mode_fallback",
