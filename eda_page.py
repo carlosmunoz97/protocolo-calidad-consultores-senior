@@ -929,8 +929,11 @@ def render_eda(inv_df: Optional[pd.DataFrame],
                 topn = st.slider("Top N", 5, 20, 10, key="explore_top_n")
 
                 tmp = df[[cat, metric]].copy()
-                tmp[cat] = tmp[cat].astype(str)
                 tmp[metric] = pd.to_numeric(tmp[metric], errors="coerce")
+                tmp = tmp.dropna(subset=[cat])
+                tmp[cat] = tmp[cat].astype(str).str.strip()
+                tmp = tmp[~tmp[cat].str.lower().isin(["nan", "none", "null", ""])]
+
 
                 if agg == "sum":
                     s = tmp.groupby(cat)[metric].sum().sort_values(ascending=False).head(topn)
