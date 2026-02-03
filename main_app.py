@@ -408,6 +408,19 @@ def clean_transacciones(trx: pd.DataFrame) -> Tuple[pd.DataFrame, EthicalLog]:
                 "ethical_justification": "Corrección de codificación; cantidad negativa específica mapeada a su magnitud."
             })
 
+    city_aliases = {"med": "medellin", "mde": "medellin", "medell": "medellin",
+                "bog": "bogota", "bta": "bogota", "bgta": "bogota"}
+
+    for col in ["Ciudad_Destino", "Canal_Venta"]:
+        if col in df.columns:
+            df[f"{col}_norm"] = df[col].apply(normalize_text_full)
+    
+    if "Ciudad_Destino_norm" in df.columns:
+        df["Ciudad_Destino_norm"] = df["Ciudad_Destino_norm"].replace(city_aliases)
+        city_map = build_fuzzy_map(df["Ciudad_Destino_norm"], threshold=0.9)
+        df["Ciudad_Destino_norm"] = df["Ciudad_Destino_norm"].map(city_map)
+        log.notes.append("Normalización Ciudad_Destino: aliases + fuzzy matching (threshold=0.9).")
+
     if "Tiempo_Entrega_Real" in df.columns:
         n_999 = int((df["Tiempo_Entrega_Real"] == 999).sum())
         df["Tiempo_Entrega_Real"] = df["Tiempo_Entrega_Real"].replace(999, np.nan)
