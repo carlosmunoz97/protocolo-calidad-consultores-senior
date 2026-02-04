@@ -14,6 +14,11 @@ de Fundamentos en Ciencia de Datos de la Maestría en Ciencia de los Datos y Ana
 - Juan Manuel Agudelo Olarte
 - Carlos José Muñoz Cabrera
 
+# Informe
+
+Desde este espacio se puede acceder al informe de de la auditoría con los hallazgos:
+- [Informe](https://github.com/carlosmunoz97/protocolo-calidad-consultores-senior/blob/main/Auditor%C3%ADa%20e%20Informe/Informe_Consultor%C3%ADa.pdf)
+
 ## Streamlit
 
 Para acceder a la aplicación de streamlit, hacer clic en [Consultoría](https://protocolo-calidad-consultores-seni0r.streamlit.app/)
